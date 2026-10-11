@@ -19,3 +19,5 @@ dist/
 # APK placed here by CI before the image build
 docker/apk/*
 !docker/apk/.gitkeep
+docker/desktop/*
+!docker/desktop/.gitkeep

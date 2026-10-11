@@ -177,6 +177,13 @@ private fun Route.publicRoutes(services: Services) {
 
     get("/download") { call.respondRedirect(Releases.APK_PATH) }
 
+    get("/download/windows") {
+        val installer = File(config.desktopDir, "CloseBy-setup.exe")
+        if (!installer.isFile) notFound()
+        call.response.headers.append("Content-Disposition", "attachment; filename=\"CloseBy-setup.exe\"")
+        call.respondFile(installer)
+    }
+
     // lets invite links open the app directly instead of the browser
     get("/.well-known/assetlinks.json") {
         val links = buildJsonArray {

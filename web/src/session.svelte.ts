@@ -114,7 +114,27 @@ function handleEvent(event: ServerEvent) {
   }
 }
 
+interface TauriWindow {
+  show(): Promise<void>;
+  unminimize(): Promise<void>;
+  setFocus(): Promise<void>;
+  requestUserAttention(type: number | null): Promise<void>;
+}
+
+/** The Windows app (Tauri) exposes its window API; in a browser this is null. */
+export function tauriWindow(): TauriWindow | null {
+  const tauri = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => TauriWindow } } }).__TAURI__;
+  return tauri?.window?.getCurrentWindow?.() ?? null;
+}
+
 function notifyIncoming(name: string) {
+  const desktop = tauriWindow();
+  if (desktop) {
+    // the window may sit hidden in the tray: bring it up and flash the taskbar (1 = critical)
+    desktop.show().then(() => desktop.unminimize()).then(() => desktop.setFocus()).catch(() => {});
+    desktop.requestUserAttention(1).catch(() => {});
+    return;
+  }
   if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
   const notification = new Notification("CloseBy", { body: `${name} ruft an`, requireInteraction: true });
   notification.onclick = () => {

@@ -21,10 +21,13 @@ COPY --from=backend /src/backend/build/install/backend /app
 COPY --from=web /web/dist /app/web
 # signed APK + version.json, put there by CI (empty in local builds)
 COPY docker/apk/ /app/apk/
+# Windows installer of the Tauri shell, put there by CI (empty in local builds)
+COPY docker/desktop/ /app/desktop/
 
 ENV DATABASE_PATH=/data/closeby.db \
     CACHE_DIR=/data/cache \
     APK_DIR=/app/apk \
+    DESKTOP_DIR=/app/desktop \
     WEB_DIR=/app/web
 USER closeby
 VOLUME /data

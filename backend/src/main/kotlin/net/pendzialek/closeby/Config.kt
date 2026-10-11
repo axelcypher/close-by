@@ -18,6 +18,8 @@ data class Config(
     val apkDir: String = "apk",
     /** Built web client; not served when missing. */
     val webDir: String = "web",
+    /** Windows installer of the Tauri shell, baked into the image by CI. */
+    val desktopDir: String = "desktop",
     val cacheDir: String = "cache",
     val ringTimeoutSeconds: Long = 45,
     /** SHA-256 of the APK signing certificate, for Android App Links (`/.well-known/assetlinks.json`). */
@@ -41,6 +43,7 @@ data class Config(
                 firebaseServiceAccountB64 = get("FIREBASE_SERVICE_ACCOUNT_B64"),
                 apkDir = get("APK_DIR") ?: defaults.apkDir,
                 webDir = get("WEB_DIR") ?: defaults.webDir,
+                desktopDir = get("DESKTOP_DIR") ?: defaults.desktopDir,
                 cacheDir = get("CACHE_DIR") ?: defaults.cacheDir,
                 ringTimeoutSeconds = get("CALL_RING_TIMEOUT_SECONDS")?.toLong() ?: defaults.ringTimeoutSeconds,
                 androidCertSha256 = get("ANDROID_CERT_SHA256") ?: defaults.androidCertSha256,

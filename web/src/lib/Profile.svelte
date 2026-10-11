@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from "../api";
-  import { loadMe, session, signOut } from "../session.svelte";
+  import { loadMe, session, signOut, tauriWindow } from "../session.svelte";
   import Avatar from "./Avatar.svelte";
 
   const person = $derived(session.me?.person);
@@ -66,6 +66,14 @@
       {/if}
       {#if message}<p class="muted">{message}</p>{/if}
       {#if error}<p class="error">{error}</p>{/if}
+    </div>
+  {/if}
+
+  {#if !tauriWindow()}
+    <div class="card stack">
+      <h2>Windows-App</h2>
+      <p class="muted">Läuft im Infobereich, startet mit Windows und klingelt auch bei geschlossenem Fenster.</p>
+      <div class="row"><a href="/download/windows">CloseBy für Windows herunterladen</a></div>
     </div>
   {/if}
 

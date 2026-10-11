@@ -94,10 +94,47 @@ jobs:
           path: apk/
           retention-days: 7
 
+  desktop:
+    name: Windows app
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Build installer
+        shell: bash
+        run: |
+          npm ci --no-audit --no-fund
+          npx tauri build
+          mkdir -p ../desktop-dist
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe ../desktop-dist/CloseBy-setup.exe
+
+      - name: Keep installer for the image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop
+          path: desktop-dist/
+          retention-days: 7
+
   image:
     name: Build container image
     # no image from a commit whose tests fail
-    needs: [test, android]
+    needs: [test, android, desktop]
     runs-on: ubuntu-latest
     outputs:
       published_tag: ${{ steps.published_tag.outputs.tag }}
@@ -115,6 +152,12 @@ jobs:
         with:
           name: apk
           path: docker/apk
+
+      - name: Fetch Windows installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop
+          path: docker/desktop
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
