@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import net.pendzialek.closeby.api.FrameCommands
 import net.pendzialek.closeby.call.CallSession
+import net.pendzialek.closeby.contact.ContactController
 import net.pendzialek.closeby.data.Api
 import net.pendzialek.closeby.data.AppMode
 import net.pendzialek.closeby.data.Images
@@ -42,6 +43,18 @@ class CloseByApp : Application() {
     /** Null unless paired as frame. */
     var frameController: FrameController? = null
         private set
+
+    /** Null unless paired as a relative's phone. */
+    var contactController: ContactController? = null
+        private set
+
+    private val _pendingInvite = MutableStateFlow<String?>(null)
+    /** Invite code from an opened invite link, consumed by the setup screen. */
+    val pendingInvite: StateFlow<String?> = _pendingInvite
+
+    fun openInvite(code: String?) {
+        _pendingInvite.value = code
+    }
     private var updateJob: Job? = null
 
     /** Set by the activity; incoming calls need a notification while false. */
@@ -72,6 +85,12 @@ class CloseByApp : Application() {
         updater = Updater(this, api)
         _mode.value = prefs.mode.takeIf { prefs.token != null }
         ensureFrameRunning()
+        ensureContactRunning()
+    }
+
+    fun ensureContactRunning(mode: AppMode? = _mode.value) {
+        if (mode != AppMode.CONTACT || contactController != null) return
+        contactController = ContactController(this).apply { start() }
     }
 
     /** Starts the frame logic once; the service and the activity both call this. */
@@ -105,6 +124,7 @@ class CloseByApp : Application() {
         prefs.mode = mode
         // the UI shows the frame as soon as the mode flips, so the controller must exist first
         ensureFrameRunning(mode)
+        ensureContactRunning(mode)
         _mode.value = mode
     }
 
@@ -112,6 +132,8 @@ class CloseByApp : Application() {
         updateJob?.cancel()
         frameController?.stop()
         frameController = null
+        contactController?.stop()
+        contactController = null
         FrameService.stop(this)
         realtime.stop()
         prefs.signOut()

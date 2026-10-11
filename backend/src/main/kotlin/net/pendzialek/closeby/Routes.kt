@@ -31,6 +31,12 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.NonCancellable
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import net.pendzialek.closeby.api.AuthResponse
@@ -71,6 +77,7 @@ const val DEVICE_AUTH = "device"
 private const val PAIRING_TTL_MS = 10 * 60 * 1000L
 private const val INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000L
 private const val MAX_AVATAR_BYTES = 2 * 1024 * 1024
+private const val MAX_PHOTO_BYTES = 30 * 1024 * 1024
 private const val LAST_SEEN_THROTTLE_MS = 30_000L
 
 data class DevicePrincipal(val device: Device)
@@ -169,6 +176,21 @@ private fun Route.publicRoutes(services: Services) {
     }
 
     get("/download") { call.respondRedirect(Releases.APK_PATH) }
+
+    // lets invite links open the app directly instead of the browser
+    get("/.well-known/assetlinks.json") {
+        val links = buildJsonArray {
+            addJsonObject {
+                putJsonArray("relation") { add("delegate_permission/common.handle_all_urls") }
+                putJsonObject("target") {
+                    put("namespace", "android_app")
+                    put("package_name", "net.pendzialek.closeby")
+                    putJsonArray("sha256_cert_fingerprints") { add(config.androidCertSha256) }
+                }
+            }
+        }
+        call.respondText(links.toString(), ContentType.Application.Json)
+    }
 
     get("/invite/{code}") {
         val code = Secrets.normalizeCode(call.parameters["code"]!!)
@@ -271,6 +293,20 @@ private fun Route.deviceRoutes(services: Services) {
         val deviceId = store.completePairing(pairing, personId, Secrets.newToken(), claimantPersonId)
             ?: throw ApiException(HttpStatusCode.Conflict, "already claimed")
         call.respond(PairingClaimResponse(deviceId, pairing.kind))
+    }
+
+    post("/api/frames/{id}/photos") {
+        val personId = call.device().personId ?: forbidden()
+        val frame = store.framesOfPerson(personId).find { it.deviceId == call.parameters["id"] } ?: notFound()
+        val albumId = frame.albumId ?: throw ApiException(HttpStatusCode.Conflict, "no album")
+        val type = call.request.contentType().withoutParameters()
+        if (type.contentType != "image") badRequest("only images")
+        val bytes = call.receive<ByteArray>()
+        if (bytes.isEmpty() || bytes.size > MAX_PHOTO_BYTES) badRequest("photo must be 1 byte to 30 MB")
+        val extension = type.contentSubtype.substringAfter('+').ifBlank { "jpg" }
+        services.photos.add(albumId, bytes, type.toString(), "closeby-${store.now()}.$extension")
+        services.hub.send(frame.deviceId, Event(EventTypes.CONFIG_CHANGED))
+        call.respond(HttpStatusCode.NoContent)
     }
 
     get("/api/frames") {

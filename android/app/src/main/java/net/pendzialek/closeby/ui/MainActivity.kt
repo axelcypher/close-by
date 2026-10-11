@@ -24,6 +24,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.delay
 import net.pendzialek.closeby.CloseByApp
+import net.pendzialek.closeby.contact.CallNotifications
+import net.pendzialek.closeby.contact.ContactScreen
+import net.pendzialek.closeby.contact.inviteCode
 import net.pendzialek.closeby.data.AppMode
 import net.pendzialek.closeby.device.DeviceOwner
 import net.pendzialek.closeby.frame.FrameScreen
@@ -36,6 +39,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIntent(intent)
         setContent {
             CloseByTheme {
                 val mode by app.mode.collectAsState()
@@ -54,22 +58,33 @@ class MainActivity : ComponentActivity() {
                 when (mode) {
                     null -> SetupScreen()
                     AppMode.FRAME -> app.frameController?.let { FrameScreen(it) }
-                    AppMode.CONTACT -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Der Kontakt-Modus kommt in einer späteren Version.")
-                    }
+                    AppMode.CONTACT -> app.contactController?.let { ContactScreen(it) }
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** Invite links (`https://…/invite/<code>`) and "Annehmen" from the call notification. */
+    private fun handleIntent(intent: android.content.Intent?) {
+        intent?.data?.toString()?.let(::inviteCode)?.let { app.openInvite(it) }
+        if (intent?.action == CallNotifications.ACTION_ACCEPT) app.contactController?.accept()
     }
 
     override fun onStart() {
         super.onStart()
         app.uiVisible = true
         if (app.mode.value == AppMode.FRAME) FrameService.start(this)
+        app.contactController?.onUiVisible(true)
     }
 
     override fun onStop() {
         app.uiVisible = false
+        app.contactController?.onUiVisible(false)
         super.onStop()
     }
 
@@ -86,6 +101,8 @@ class MainActivity : ComponentActivity() {
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             insets.show(WindowInsetsCompat.Type.systemBars())
+            // a phone needs camera and microphone for calls and notifications to ring
+            if (mode == AppMode.CONTACT) requestPermissions(includeCamera = true)
         }
     }
 
@@ -99,11 +116,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestMissingPermissions() {
+        requestPermissions(includeCamera = true)
+    }
+
+    private fun requestPermissions(includeCamera: Boolean) {
         // a device owner grants these itself
         if (DeviceOwner.isActive(this)) return
         val wanted = buildList {
-            add(Manifest.permission.CAMERA)
-            add(Manifest.permission.RECORD_AUDIO)
+            if (includeCamera) add(Manifest.permission.CAMERA)
+            if (includeCamera) add(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }
         val missing = wanted.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }

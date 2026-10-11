@@ -5,7 +5,12 @@ import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.post
+import io.ktor.client.request.put
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -30,6 +35,9 @@ interface PhotoSource {
     suspend fun albums(): List<ImmichAlbum>
     suspend fun albumPhotos(albumId: String): List<SlideshowPhoto>
     suspend fun preview(assetId: String): ByteArray
+
+    /** Uploads an image and adds it to the album; needs `asset.upload` and `albumAsset.create`. */
+    suspend fun addToAlbum(albumId: String, image: ByteArray, contentType: String, fileName: String)
 }
 
 class PhotoSourceException(message: String) : Exception(message)
@@ -38,6 +46,8 @@ object NoPhotoSource : PhotoSource {
     override suspend fun albums() = throw PhotoSourceException("Immich is not configured")
     override suspend fun albumPhotos(albumId: String) = throw PhotoSourceException("Immich is not configured")
     override suspend fun preview(assetId: String) = throw PhotoSourceException("Immich is not configured")
+    override suspend fun addToAlbum(albumId: String, image: ByteArray, contentType: String, fileName: String) =
+        throw PhotoSourceException("Immich is not configured")
 }
 
 class ImmichPhotoSource(private val baseUrl: String, private val apiKey: String, private val http: HttpClient) : PhotoSource {
@@ -107,6 +117,38 @@ class ImmichPhotoSource(private val baseUrl: String, private val apiKey: String,
         return response.body()
     }
 
+    @Serializable
+    private data class UploadResult(val id: String)
+
+    override suspend fun addToAlbum(albumId: String, image: ByteArray, contentType: String, fileName: String) {
+        val now = java.time.Instant.now().toString()
+        val uploaded = decode<UploadResult>(
+            http.submitFormWithBinaryData(
+                url = "$baseUrl/api/assets",
+                formData = formData {
+                    // Immich dedups per device by this id; content hash keeps re-shares idempotent
+                    append("deviceAssetId", "closeby-${Secrets.sha256(image).take(32)}")
+                    append("deviceId", "closeby")
+                    append("fileCreatedAt", now)
+                    append("fileModifiedAt", now)
+                    append(
+                        "assetData", image,
+                        Headers.build {
+                            append(HttpHeaders.ContentType, contentType)
+                            append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                        },
+                    )
+                },
+            ) { header("x-api-key", apiKey) },
+        )
+        val added = http.put("$baseUrl/api/albums/$albumId/assets") {
+            header("x-api-key", apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject { putJsonArray("ids") { add(uploaded.id) } }.toString())
+        }
+        if (!added.status.isSuccess()) throw PhotoSourceException("Immich album add: ${added.status} ${added.bodyAsText().take(200)}")
+    }
+
     private suspend inline fun <reified T> decode(response: HttpResponse): T {
         val text = response.bodyAsText()
         if (!response.status.isSuccess()) throw PhotoSourceException("Immich ${response.status}: ${text.take(200)}")
@@ -135,6 +177,12 @@ class PhotoService(
         val photos = source.albumPhotos(albumId)
         albums[albumId] = clock() to photos
         photos
+    }
+
+    /** Adds a shared photo to the album and shows it on the next slideshow load. */
+    suspend fun add(albumId: String, image: ByteArray, contentType: String, fileName: String) {
+        source.addToAlbum(albumId, image, contentType, fileName)
+        mutex.withLock { albums.remove(albumId) }
     }
 
     suspend fun preview(albumId: String, assetId: String): ByteArray? {

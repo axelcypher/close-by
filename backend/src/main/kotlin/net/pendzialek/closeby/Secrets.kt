@@ -25,8 +25,10 @@ object Secrets {
     /** Accepts "abcd-efgh", "ABCD EFGH", ... */
     fun normalizeCode(code: String): String = code.uppercase().filter { it.isLetterOrDigit() }
 
-    fun sha256(value: String): String =
-        MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+    fun sha256(value: String): String = sha256(value.toByteArray())
+
+    fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     fun constantTimeEquals(a: String, b: String): Boolean =
         MessageDigest.isEqual(a.toByteArray(), b.toByteArray())

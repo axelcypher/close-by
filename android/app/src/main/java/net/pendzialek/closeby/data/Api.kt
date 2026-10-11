@@ -3,9 +3,18 @@ package net.pendzialek.closeby.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import net.pendzialek.closeby.api.ApiError
 import net.pendzialek.closeby.api.AppRelease
+import net.pendzialek.closeby.api.AuthResponse
+import net.pendzialek.closeby.api.FrameRef
+import net.pendzialek.closeby.api.InviteResponse
+import net.pendzialek.closeby.api.PairingClaimRequest
+import net.pendzialek.closeby.api.PairingClaimResponse
+import net.pendzialek.closeby.api.PushTokenRequest
+import net.pendzialek.closeby.api.RegisterRequest
+import net.pendzialek.closeby.api.UpdateMeRequest
 import net.pendzialek.closeby.api.CallJoin
 import net.pendzialek.closeby.api.DeviceKind
 import net.pendzialek.closeby.api.FrameConfig
@@ -90,6 +99,43 @@ class Api(private val prefs: Prefs, cacheDir: File) {
         }
     }
 
+    // ---- contact mode ----
+
+    suspend fun register(request: RegisterRequest): AuthResponse =
+        post("/api/register", request, RegisterRequest.serializer(), AuthResponse.serializer())
+
+    suspend fun claimPairing(code: String): PairingClaimResponse =
+        post("/api/pairing/claim", PairingClaimRequest(code), PairingClaimRequest.serializer(), PairingClaimResponse.serializer())
+
+    suspend fun frames(): List<FrameRef> = get("/api/frames", ListSerializer(FrameRef.serializer()))
+
+    suspend fun rename(name: String) = call<Unit>(
+        request("/api/me").patch(json.encodeToString(UpdateMeRequest.serializer(), UpdateMeRequest(name)).toRequestBody(JSON)).build(),
+        null,
+    )
+
+    suspend fun uploadAvatar(jpeg: ByteArray) = call<Unit>(
+        request("/api/me/avatar").put(jpeg.toRequestBody(JPEG)).build(),
+        null,
+    )
+
+    suspend fun setPushToken(token: String?) = call<Unit>(
+        request("/api/me/push").put(json.encodeToString(PushTokenRequest.serializer(), PushTokenRequest(token)).toRequestBody(JSON)).build(),
+        null,
+    )
+
+    suspend fun signOutDevice() = call<Unit>(request("/api/me").delete().build(), null)
+
+    suspend fun invite(): InviteResponse = post("/api/admin/invites", InviteResponse.serializer())
+
+    suspend fun sharePhoto(frameId: String, jpeg: ByteArray) = call<Unit>(
+        request("/api/frames/$frameId/photos").post(jpeg.toRequestBody(JPEG)).build(),
+        null,
+    )
+
+    suspend fun callFrame(frameId: String): CallJoin =
+        post("/api/calls", StartCallRequest(frameId = frameId), StartCallRequest.serializer(), CallJoin.serializer())
+
     // ---- calls ----
 
     suspend fun startCall(personId: String): CallJoin =
@@ -129,6 +175,7 @@ class Api(private val prefs: Prefs, cacheDir: File) {
 
     private companion object {
         val JSON = "application/json".toMediaType()
+        val JPEG = "image/jpeg".toMediaType()
         val EMPTY: RequestBody = ByteArray(0).toRequestBody(null)
     }
 }

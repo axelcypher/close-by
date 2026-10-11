@@ -1,4 +1,4 @@
-package net.pendzialek.closeby.frame
+package net.pendzialek.closeby.call
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -38,21 +38,22 @@ import androidx.compose.ui.viewinterop.AndroidView
 import io.livekit.android.renderer.TextureViewRenderer
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.VideoTrack
-import net.pendzialek.closeby.api.FrameContact
 import net.pendzialek.closeby.ui.Danger
+import net.pendzialek.closeby.ui.rememberAvatar
 import net.pendzialek.closeby.ui.Ok
 
 private val Dark = Color(0xFF151515)
 
 @Composable
-fun CallScreen(call: CallUi, viewModel: FrameController) {
+fun CallScreen(call: CallUi, viewModel: CallController) {
     // swallow touches so nothing behind the overlay reacts
     Box(Modifier.fillMaxSize().background(Dark).pointerInput(Unit) {}) {
         when (call) {
             is CallUi.Active -> ActiveCall(call, viewModel)
             is CallUi.Incoming -> Prompt(
                 name = call.name,
-                avatarContact = viewModel.state.value.config?.contacts?.find { it.personId == call.personId },
+                personId = call.personId,
+                avatarVersion = call.avatarVersion,
                 viewModel = viewModel,
                 label = if (call.autoAnswer) "verbindet gleich …" else "ruft an",
             ) {
@@ -64,10 +65,10 @@ fun CallScreen(call: CallUi, viewModel: FrameController) {
                     BigButton("Nicht jetzt", Danger, viewModel::decline)
                 }
             }
-            is CallUi.Outgoing -> Prompt(call.contact.name, call.contact, viewModel, "wird angerufen …") {
+            is CallUi.Outgoing -> Prompt(call.name, call.personId, call.avatarVersion, viewModel, "wird angerufen …") {
                 BigButton("Auflegen", Danger, viewModel::hangUp)
             }
-            is CallUi.Ended -> Prompt(call.name, null, viewModel, call.message) {}
+            is CallUi.Ended -> Prompt(call.name, null, null, viewModel, call.message) {}
             CallUi.None -> Unit
         }
     }
@@ -76,12 +77,13 @@ fun CallScreen(call: CallUi, viewModel: FrameController) {
 @Composable
 private fun Prompt(
     name: String,
-    avatarContact: FrameContact?,
-    viewModel: FrameController,
+    personId: String?,
+    avatarVersion: Long?,
+    viewModel: CallController,
     label: String,
     buttons: @Composable () -> Unit,
 ) {
-    val avatar = avatarContact?.let { rememberAvatar(it, viewModel.images) }
+    val avatar = rememberAvatar(personId, avatarVersion, viewModel.images)
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -104,7 +106,7 @@ private fun Prompt(
 }
 
 @Composable
-private fun ActiveCall(call: CallUi.Active, viewModel: FrameController) {
+private fun ActiveCall(call: CallUi.Active, viewModel: CallController) {
     val remote by viewModel.callSession.remoteVideo.collectAsState()
     val local by viewModel.callSession.localVideo.collectAsState()
     val room = viewModel.callSession.currentRoom

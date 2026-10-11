@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.kotlin.compose)
+    // needs app/google-services.json: CI writes it from GOOGLE_SERVICES_JSON_B64, locally copy it there
+    alias(libs.plugins.google.services)
 }
 
 // CI passes these; local builds are debug-signed with versionCode 1
@@ -66,4 +68,8 @@ dependencies {
     implementation(libs.livekit.android)
     implementation(libs.okhttp.doh)
     implementation(libs.zxing.core)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+    implementation(libs.code.scanner)
+    implementation(libs.androidx.fragment)
 }

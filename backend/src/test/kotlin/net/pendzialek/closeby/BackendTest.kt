@@ -13,6 +13,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
@@ -76,6 +77,10 @@ class BackendTest {
     }
 
     private class FakePhotos : PhotoSource {
+        val added = mutableListOf<Pair<String, Int>>()
+        override suspend fun addToAlbum(albumId: String, image: ByteArray, contentType: String, fileName: String) {
+            added += albumId to image.size
+        }
         override suspend fun albums() = listOf(ImmichAlbum("album-1", "Familie", 2))
         override suspend fun albumPhotos(albumId: String) = listOf(
             SlideshowPhoto("11111111-1111-1111-1111-111111111111"),
@@ -86,6 +91,7 @@ class BackendTest {
 
     private val rooms = FakeRooms()
     private val push = FakePush()
+    private val photos = FakePhotos()
 
     private fun test(block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
         val dir = Files.createTempDirectory("closeby-test").toFile()
@@ -96,7 +102,7 @@ class BackendTest {
             apkDir = dir.resolve("apk").path,
             webDir = dir.resolve("web").path,
         )
-        val services = Services.create(config, push = push, rooms = rooms, photoSource = FakePhotos())
+        val services = Services.create(config, push = push, rooms = rooms, photoSource = photos)
         application { closeby(services) }
         val client = createClient {
             install(ContentNegotiation) { json(apiJson) }
@@ -345,6 +351,29 @@ class BackendTest {
             setBody(FrameCommandRequest(FrameCommands.UPDATE))
         }
         assertEquals(HttpStatusCode.Conflict, offline.status)
+    }
+
+    @Test
+    fun `contacts share photos into the frame's album`() = test { client ->
+        val admin = client.admin()
+        val frame = client.pairFrame(admin)
+        val share: suspend () -> HttpResponse = {
+            client.post("/api/frames/${frame.deviceId}/photos") {
+                bearerAuth(admin.token)
+                contentType(ContentType.Image.JPEG)
+                setBody(byteArrayOf(1, 2, 3, 4))
+            }
+        }
+        assertEquals(HttpStatusCode.Conflict, share().status) // no album yet
+        client.put("/api/admin/frames/${frame.deviceId}") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(FrameUpdate("Wohnzimmer Oma", "album-1", FrameSettings()))
+        }
+        assertEquals(HttpStatusCode.NoContent, share().status)
+        assertEquals(listOf("album-1" to 4), photos.added)
+        val links = client.get("/.well-known/assetlinks.json")
+        assertTrue(links.bodyAsText().contains("net.pendzialek.closeby"))
     }
 
     @Test

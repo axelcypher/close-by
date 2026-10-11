@@ -68,6 +68,11 @@ jobs:
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/closeby-release.p12"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/closeby-release.p12" >> "$GITHUB_ENV"
 
+      - name: Restore Firebase config
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
+
       - name: Build release APK
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

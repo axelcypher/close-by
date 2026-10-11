@@ -21,7 +21,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -46,6 +49,12 @@ import net.pendzialek.closeby.CloseByApp
 import net.pendzialek.closeby.api.DeviceKind
 import net.pendzialek.closeby.api.PairingStartResponse
 import net.pendzialek.closeby.api.PairingState
+import net.pendzialek.closeby.api.NewDevice
+import net.pendzialek.closeby.api.NewPerson
+import net.pendzialek.closeby.api.RegisterRequest
+import net.pendzialek.closeby.contact.inviteCode
+import net.pendzialek.closeby.contact.scanQr
+import net.pendzialek.closeby.data.ApiException
 import net.pendzialek.closeby.data.AppMode
 
 sealed interface PairingUi {
@@ -87,16 +96,62 @@ class PairingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** A relative's phone: invite code or admin code, plus the name the frame shows. */
+    fun registerContact(server: String, code: String, admin: Boolean, name: String) {
+        app.prefs.server = server
+        app.prefs.forcePublicDns = false
+        job?.cancel()
+        job = viewModelScope.launch {
+            _state.value = PairingUi.Starting
+            try {
+                val request = RegisterRequest(
+                    code = code.trim().takeIf { !admin },
+                    adminCode = code.trim().takeIf { admin },
+                    device = NewDevice(DeviceKind.PHONE, Build.MODEL),
+                    person = NewPerson(name.trim()),
+                )
+                val auth = app.api.register(request)
+                app.openInvite(null)
+                app.paired(AppMode.CONTACT, auth.token, auth.deviceId)
+            } catch (e: ApiException) {
+                _state.value = PairingUi.Failed(
+                    if (e.status == 403) {
+                        if (admin) "Der Admin-Code stimmt nicht." else "Die Einladung ist ungültig oder abgelaufen."
+                    } else {
+                        "Das hat nicht geklappt: ${e.message}"
+                    },
+                )
+            } catch (e: Exception) {
+                _state.value = PairingUi.Failed("Der Server ist nicht erreichbar.\n${e.message ?: ""}")
+            }
+        }
+    }
+
     fun cancel() {
         job?.cancel()
         _state.value = PairingUi.Idle
     }
 }
 
+private enum class SetupChoice { CHOOSE, INVITE, ADMIN }
+
 @Composable
 fun SetupScreen(viewModel: PairingViewModel = viewModel()) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+    val app = context.applicationContext as CloseByApp
+    val invite by app.pendingInvite.collectAsState()
     var server by remember { mutableStateOf(viewModel.server) }
+    var choice by remember { mutableStateOf(SetupChoice.CHOOSE) }
+    var code by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    // an opened invite link jumps straight to the invite form
+    LaunchedEffect(invite) {
+        invite?.let {
+            code = it
+            choice = SetupChoice.INVITE
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Paper), contentAlignment = Alignment.Center) {
         Column(
@@ -117,14 +172,50 @@ fun SetupScreen(viewModel: PairingViewModel = viewModel()) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Button(onClick = { viewModel.startFrame(server) }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                        Text("Als Rahmen einrichten", fontSize = 18.sp)
+                    when (choice) {
+                        SetupChoice.CHOOSE -> {
+                            Button(onClick = { choice = SetupChoice.INVITE }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                                Text("Ich habe eine Einladung", fontSize = 18.sp)
+                            }
+                            OutlinedButton(onClick = { viewModel.startFrame(server) }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                                Text("Dieses Gerät als Rahmen einrichten", fontSize = 18.sp)
+                            }
+                            TextButton(onClick = { choice = SetupChoice.ADMIN }) { Text("Als Admin einrichten") }
+                            Text(
+                                "Ein Rahmen zeigt nach der Einrichtung einen Code, den ein Admin übernimmt.",
+                                color = Muted,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        SetupChoice.INVITE, SetupChoice.ADMIN -> {
+                            val admin = choice == SetupChoice.ADMIN
+                            OutlinedTextField(
+                                value = code,
+                                onValueChange = { code = it },
+                                label = { Text(if (admin) "Admin-Code" else "Einladungscode") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            if (!admin) {
+                                TextButton(onClick = {
+                                    scanQr(context) { raw -> code = inviteCode(raw) ?: raw }
+                                }) { Text("Einladungs-QR-Code scannen") }
+                            }
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = { name = it },
+                                label = { Text("Dein Name, so sieht ihn der Rahmen") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Button(
+                                onClick = { viewModel.registerContact(server, code, admin, name) },
+                                enabled = code.isNotBlank() && name.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth().height(56.dp),
+                            ) { Text("Einrichten", fontSize = 18.sp) }
+                            TextButton(onClick = { choice = SetupChoice.CHOOSE }) { Text("Zurück") }
+                        }
                     }
-                    Text(
-                        "Der Rahmen zeigt danach einen Code. Ein Admin übernimmt ihn in CloseBy unter „Rahmen“.",
-                        color = Muted,
-                        textAlign = TextAlign.Center,
-                    )
                     if (s is PairingUi.Failed) Text(s.message, color = Danger, textAlign = TextAlign.Center)
                 }
                 PairingUi.Starting -> Text("Verbinde mit dem Server …", color = Muted)

@@ -18,6 +18,8 @@ import kotlinx.coroutines.launch
 import net.pendzialek.closeby.BuildConfig
 import net.pendzialek.closeby.CloseByApp
 import net.pendzialek.closeby.api.DeviceStatus
+import net.pendzialek.closeby.call.CallController
+import net.pendzialek.closeby.call.CallUi
 import net.pendzialek.closeby.api.EndReasons
 import net.pendzialek.closeby.api.Event
 import net.pendzialek.closeby.api.EventTypes
@@ -31,14 +33,6 @@ import java.time.LocalTime
 
 enum class FrameView { CONTACTS, SLIDESHOW, NIGHT }
 
-sealed interface CallUi {
-    data object None : CallUi
-    data class Outgoing(val contact: FrameContact, val callId: String? = null) : CallUi
-    data class Incoming(val callId: String, val name: String, val personId: String, val autoAnswer: Boolean) : CallUi
-    data class Active(val callId: String, val name: String) : CallUi
-    data class Ended(val name: String, val message: String) : CallUi
-}
-
 data class FrameState(
     val config: FrameConfig? = null,
     val photos: List<SlideshowPhoto> = emptyList(),
@@ -51,11 +45,11 @@ data class FrameState(
  * Everything a frame does, independent of whether its screen is visible:
  * lives as long as the app is paired as frame, kept alive by [FrameService].
  */
-class FrameController(private val app: CloseByApp) {
+class FrameController(private val app: CloseByApp) : CallController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val api = app.api
-    val images = app.images
-    val callSession = app.callSession
+    override val images = app.images
+    override val callSession = app.callSession
 
     private val _state = MutableStateFlow(FrameState())
     val state: StateFlow<FrameState> = _state
@@ -169,7 +163,7 @@ class FrameController(private val app: CloseByApp) {
     fun call(contact: FrameContact) {
         if (_state.value.call != CallUi.None) return
         touched()
-        _state.update { it.copy(call = CallUi.Outgoing(contact)) }
+        _state.update { it.copy(call = CallUi.Outgoing(contact.name, contact.personId, contact.avatarVersion)) }
         scope.launch {
             try {
                 val join = api.startCall(contact.personId)
@@ -178,7 +172,7 @@ class FrameController(private val app: CloseByApp) {
                     runCatching { api.endCall(join.callId) }
                     return@launch
                 }
-                _state.update { it.copy(call = CallUi.Outgoing(contact, join.callId)) }
+                _state.update { it.copy(call = (it.call as CallUi.Outgoing).copy(callId = join.callId)) }
                 callSession.join(join, _state.value.config?.settings?.volume)
             } catch (e: ApiException) {
                 finish(contact.name, if (e.status == 409) "ist gerade nicht erreichbar" else "Anruf hat nicht geklappt")
@@ -188,7 +182,7 @@ class FrameController(private val app: CloseByApp) {
         }
     }
 
-    fun accept() {
+    override fun accept() {
         val incoming = _state.value.call as? CallUi.Incoming ?: return
         stopRinging()
         _state.update { it.copy(call = CallUi.Active(incoming.callId, incoming.name)) }
@@ -201,14 +195,14 @@ class FrameController(private val app: CloseByApp) {
         }
     }
 
-    fun decline() {
+    override fun decline() {
         val incoming = _state.value.call as? CallUi.Incoming ?: return
         stopRinging()
         _state.update { it.copy(call = CallUi.None) }
         scope.launch { runCatching { api.declineCall(incoming.callId) } }
     }
 
-    fun hangUp() {
+    override fun hangUp() {
         val call = _state.value.call
         val callId = when (call) {
             is CallUi.Outgoing -> call.callId
@@ -217,7 +211,7 @@ class FrameController(private val app: CloseByApp) {
             else -> null
         }
         val name = when (call) {
-            is CallUi.Outgoing -> call.contact.name
+            is CallUi.Outgoing -> call.name
             is CallUi.Active -> call.name
             is CallUi.Incoming -> call.name
             else -> ""
@@ -237,7 +231,8 @@ class FrameController(private val app: CloseByApp) {
                 touched()
                 if (!app.uiVisible) onIncomingWhileHidden(from.name)
                 val auto = event.autoAnswer == true
-                _state.update { it.copy(call = CallUi.Incoming(event.callId!!, from.name, from.id, auto)) }
+                val version = _state.value.config?.contacts?.find { it.personId == from.id }?.avatarVersion
+                _state.update { it.copy(call = CallUi.Incoming(event.callId!!, from.name, from.id, version, auto)) }
                 if (auto) {
                     scope.launch {
                         delay(3_000)
@@ -248,14 +243,14 @@ class FrameController(private val app: CloseByApp) {
                 }
             }
             EventTypes.CALL_ACCEPTED -> if (call is CallUi.Outgoing && call.callId == event.callId) {
-                _state.update { it.copy(call = CallUi.Active(event.callId!!, call.contact.name)) }
+                _state.update { it.copy(call = CallUi.Active(event.callId!!, call.name)) }
             }
             EventTypes.CALL_DECLINED -> if (call is CallUi.Outgoing && call.callId == event.callId) {
-                finish(call.contact.name, "hat gerade keine Zeit")
+                finish(call.name, "hat gerade keine Zeit")
             }
             EventTypes.CALL_ENDED -> {
                 val (callId, name) = when (call) {
-                    is CallUi.Outgoing -> call.callId to call.contact.name
+                    is CallUi.Outgoing -> call.callId to call.name
                     is CallUi.Incoming -> call.callId to call.name
                     is CallUi.Active -> call.callId to call.name
                     else -> return

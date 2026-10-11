@@ -43,9 +43,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import net.pendzialek.closeby.api.FrameContact
+import net.pendzialek.closeby.call.CallScreen
+import net.pendzialek.closeby.call.CallUi
 import net.pendzialek.closeby.api.SlideshowPhoto
 import net.pendzialek.closeby.data.Images
 import net.pendzialek.closeby.ui.Accent
+import net.pendzialek.closeby.ui.rememberAvatar
 import net.pendzialek.closeby.ui.Muted
 import net.pendzialek.closeby.ui.Paper
 import java.time.LocalDateTime
@@ -175,15 +178,6 @@ private fun ContactTile(contact: FrameContact, images: Images, modifier: Modifie
             modifier = Modifier.padding(top = 10.dp),
         )
     }
-}
-
-@Composable
-fun rememberAvatar(contact: FrameContact, images: Images): ImageBitmap? {
-    val version = contact.avatarVersion ?: return null
-    val bitmap by produceState<ImageBitmap?>(null, contact.personId, version) {
-        value = images.avatar(contact.personId, version)?.asImageBitmap()
-    }
-    return bitmap
 }
 
 @Composable
