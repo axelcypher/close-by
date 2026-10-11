@@ -81,6 +81,7 @@ function handleEvent(event: ServerEvent) {
   const state = call.state;
   switch (event.type) {
     case "config.changed":
+    case "presence.changed":
       session.revision++;
       break;
     case "call.incoming":

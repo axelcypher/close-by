@@ -45,6 +45,8 @@ export interface ServerEvent {
   from?: CallParty;
   autoAnswer?: boolean;
   reason?: string;
+  deviceId?: string;
+  online?: boolean;
 }
 
 const TOKEN_KEY = "closeby.token";

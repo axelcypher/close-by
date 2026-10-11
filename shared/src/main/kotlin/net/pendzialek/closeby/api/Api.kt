@@ -215,6 +215,8 @@ object EventTypes {
     const val CALL_TAKEN = "call.taken"
     const val CALL_ENDED = "call.ended"
     const val CONFIG_CHANGED = "config.changed"
+    /** A device came online or went offline; carries [Event.deviceId] and [Event.online]. */
+    const val PRESENCE_CHANGED = "presence.changed"
 }
 
 object EndReasons {
@@ -233,6 +235,8 @@ data class Event(
     val from: CallParty? = null,
     val autoAnswer: Boolean? = null,
     val reason: String? = null,
+    val deviceId: String? = null,
+    val online: Boolean? = null,
 )
 
 // ---- app updates ----

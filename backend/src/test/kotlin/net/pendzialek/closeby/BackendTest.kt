@@ -298,6 +298,36 @@ class BackendTest {
     }
 
     @Test
+    fun `devices learn when a frame comes online`() = test { client ->
+        val admin = client.admin()
+        val frame = client.pairFrame(admin)
+        val presence = CompletableDeferred<Event>()
+        coroutineScope {
+            val listener = launch {
+                client.webSocket("/api/ws") {
+                    send(apiJson.encodeToString(Event.serializer(), Event(EventTypes.AUTH, token = admin.token)))
+                    for (message in incoming) {
+                        val event = apiJson.decodeFromString(Event.serializer(), (message as Frame.Text).readText())
+                        if (event.type == EventTypes.READY) {
+                            // now the frame connects
+                            launch {
+                                client.webSocket("/api/ws") {
+                                    send(apiJson.encodeToString(Event.serializer(), Event(EventTypes.AUTH, token = frame.token)))
+                                    incoming.receive()
+                                }
+                            }
+                        }
+                        if (event.type == EventTypes.PRESENCE_CHANGED && event.deviceId == frame.deviceId) presence.complete(event)
+                    }
+                }
+            }
+            val event = withTimeout(5_000) { presence.await() }
+            assertEquals(true, event.online)
+            listener.cancel()
+        }
+    }
+
+    @Test
     fun `revoked devices lose access`() = test { client ->
         val admin = client.admin()
         val frame = client.pairFrame(admin)

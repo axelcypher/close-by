@@ -20,6 +20,8 @@ android {
         versionCode = versionCodeFromCi
         versionName = "0.1.$versionCodeFromCi"
         buildConfigField("String", "DEFAULT_SERVER", "\"https://closeby.pendzialek.net\"")
+        // phones and Fire tablets are ARM; x86 builds of WebRTC only bloat the APK
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     signingConfigs {

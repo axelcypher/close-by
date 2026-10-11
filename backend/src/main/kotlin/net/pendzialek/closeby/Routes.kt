@@ -30,6 +30,8 @@ import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import net.pendzialek.closeby.api.AuthResponse
 import net.pendzialek.closeby.api.DeviceInfo
@@ -185,15 +187,18 @@ private fun Route.realtime(services: Services) {
             return@webSocket
         }
         val deviceId = principal.device.id
-        services.hub.add(deviceId, this)
+        if (services.hub.add(deviceId, this)) services.hub.broadcast(presence(deviceId, true))
         try {
             send(Frame.Text(apiJson.encodeToString(Event.serializer(), Event(EventTypes.READY))))
             for (frame in incoming) {
                 // clients only listen; anything they send is ignored
             }
         } finally {
-            services.hub.remove(deviceId, this)
-            services.store.touch(deviceId)
+            // the session's coroutine is usually cancelled by now
+            withContext(NonCancellable) {
+                if (services.hub.remove(deviceId, this@webSocket)) services.hub.broadcast(presence(deviceId, false))
+                services.store.touch(deviceId)
+            }
         }
     }
 }
@@ -430,6 +435,9 @@ private fun String.cleanName(): String {
 }
 
 private fun Person.toInfo() = PersonInfo(id, name, displayName, isAdmin, avatarVersion)
+
+private fun presence(deviceId: String, online: Boolean) =
+    Event(EventTypes.PRESENCE_CHANGED, deviceId = deviceId, online = online)
 
 private fun Services.deviceInfo(device: Device) = DeviceInfo(
     id = device.id,

@@ -18,9 +18,6 @@
   $effect(() => {
     session.revision;
     load();
-    // online state changes without an event; refresh now and then
-    const timer = setInterval(load, 30_000);
-    return () => clearInterval(timer);
   });
 
   async function askPermission() {

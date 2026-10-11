@@ -13,12 +13,30 @@ class Hub {
     private val json = Json { explicitNulls = false }
     private val sessions = ConcurrentHashMap<String, MutableSet<WebSocketSession>>()
 
-    fun add(deviceId: String, session: WebSocketSession) {
-        sessions.computeIfAbsent(deviceId) { ConcurrentHashMap.newKeySet() }.add(session)
+    /** True if the device was offline before, i.e. its presence changed. */
+    fun add(deviceId: String, session: WebSocketSession): Boolean {
+        var wasOffline = false
+        sessions.compute(deviceId) { _, set ->
+            wasOffline = set.isNullOrEmpty()
+            (set ?: ConcurrentHashMap.newKeySet()).apply { add(session) }
+        }
+        return wasOffline
     }
 
-    fun remove(deviceId: String, session: WebSocketSession) {
-        sessions.computeIfPresent(deviceId) { _, set -> set.apply { remove(session) }.ifEmpty { null } }
+    /** True if this was the device's last session, i.e. it is offline now. */
+    fun remove(deviceId: String, session: WebSocketSession): Boolean {
+        var nowOffline = false
+        sessions.computeIfPresent(deviceId) { _, set ->
+            set.remove(session)
+            nowOffline = set.isEmpty()
+            set.ifEmpty { null }
+        }
+        return nowOffline
+    }
+
+    /** Small family installation: everybody connected gets presence changes. */
+    suspend fun broadcast(event: Event) {
+        sessions.keys.forEach { send(it, event) }
     }
 
     /** Closes every session of a revoked device. */
