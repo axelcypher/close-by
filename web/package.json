@@ -1,0 +1,23 @@
+{
+  "name": "closeby-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "livekit-client": "2.22.3",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/qrcode": "1.5.6",
+    "svelte": "5.57.1",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "8.3.1"
+  }
+}

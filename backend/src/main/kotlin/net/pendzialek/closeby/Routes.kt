@@ -209,6 +209,14 @@ private fun Route.deviceRoutes(services: Services) {
         call.respond(Me(services.deviceInfo(device), person?.toInfo()))
     }
 
+    delete("/api/me") {
+        // signing out revokes this device's token
+        val device = call.device()
+        store.deleteDevice(device.id)
+        services.hub.disconnect(device.id)
+        call.respond(HttpStatusCode.NoContent)
+    }
+
     patch("/api/me") {
         val personId = call.device().personId ?: forbidden()
         store.updatePersonName(personId, call.receive<UpdateMeRequest>().name.cleanName())
@@ -461,10 +469,13 @@ private fun invitePage(code: String) = """
     </head>
     <body>
       <h1>Du bist zu CloseBy eingeladen</h1>
+      <h2>Auf dem Handy</h2>
       <p>1. Installiere die App:</p>
       <p><a class="button" href="/download">CloseBy für Android herunterladen</a></p>
       <p>2. Öffne die App, wähle „Ich habe eine Einladung“ und gib diesen Code ein:</p>
       <p><code>$code</code></p>
+      <h2>Am PC</h2>
+      <p><a href="/?invite=$code">CloseBy im Browser einrichten</a></p>
     </body>
     </html>
 """.trimIndent()
