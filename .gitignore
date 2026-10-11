@@ -15,3 +15,7 @@ local.properties
 node_modules/
 dist/
 .env
+
+# APK placed here by CI before the image build
+docker/apk/*
+!docker/apk/.gitkeep

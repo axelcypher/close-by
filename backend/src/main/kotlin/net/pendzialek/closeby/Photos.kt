@@ -1,0 +1,158 @@
+package net.pendzialek.closeby
+
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import io.ktor.http.isSuccess
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.add
+import net.pendzialek.closeby.api.ImmichAlbum
+import net.pendzialek.closeby.api.SlideshowPhoto
+import java.io.File
+
+interface PhotoSource {
+    suspend fun albums(): List<ImmichAlbum>
+    suspend fun albumPhotos(albumId: String): List<SlideshowPhoto>
+    suspend fun preview(assetId: String): ByteArray
+}
+
+class PhotoSourceException(message: String) : Exception(message)
+
+object NoPhotoSource : PhotoSource {
+    override suspend fun albums() = throw PhotoSourceException("Immich is not configured")
+    override suspend fun albumPhotos(albumId: String) = throw PhotoSourceException("Immich is not configured")
+    override suspend fun preview(assetId: String) = throw PhotoSourceException("Immich is not configured")
+}
+
+class ImmichPhotoSource(private val baseUrl: String, private val apiKey: String, private val http: HttpClient) : PhotoSource {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @Serializable
+    private data class AlbumDto(
+        val id: String,
+        val albumName: String,
+        val assetCount: Int = 0,
+        val assets: List<AssetDto> = emptyList(),
+    )
+
+    @Serializable
+    private data class AssetDto(val id: String, val type: String = "IMAGE", val fileCreatedAt: String? = null)
+
+    @Serializable
+    private data class SearchResponse(val assets: SearchAssets)
+
+    @Serializable
+    private data class SearchAssets(val items: List<AssetDto> = emptyList(), val nextPage: String? = null)
+
+    override suspend fun albums(): List<ImmichAlbum> =
+        decode<List<AlbumDto>>(http.get("$baseUrl/api/albums") { header("x-api-key", apiKey) })
+            .map { ImmichAlbum(it.id, it.albumName, it.assetCount) }
+
+    override suspend fun albumPhotos(albumId: String): List<SlideshowPhoto> {
+        val album = decode<AlbumDto>(
+            http.get("$baseUrl/api/albums/$albumId") {
+                header("x-api-key", apiKey)
+                parameter("withoutAssets", false)
+            },
+        )
+        // newer Immich versions may leave out the asset list; search by album then
+        val assets = album.assets.ifEmpty { if (album.assetCount > 0) searchAlbum(albumId) else emptyList() }
+        return assets.filter { it.type == "IMAGE" }.map { SlideshowPhoto(it.id, it.fileCreatedAt) }
+    }
+
+    private suspend fun searchAlbum(albumId: String): List<AssetDto> = buildList {
+        var page: String? = "1"
+        while (page != null) {
+            val response = decode<SearchResponse>(
+                http.post("$baseUrl/api/search/metadata") {
+                    header("x-api-key", apiKey)
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        buildJsonObject {
+                            putJsonArray("albumIds") { add(albumId) }
+                            put("type", "IMAGE")
+                            put("size", 1000)
+                            put("page", page.toInt())
+                        }.toString(),
+                    )
+                },
+            )
+            addAll(response.assets.items)
+            page = response.assets.nextPage
+        }
+    }
+
+    override suspend fun preview(assetId: String): ByteArray {
+        val response = http.get("$baseUrl/api/assets/$assetId/thumbnail") {
+            header("x-api-key", apiKey)
+            parameter("size", "preview")
+        }
+        if (!response.status.isSuccess()) throw PhotoSourceException("Immich preview $assetId: ${response.status}")
+        return response.body()
+    }
+
+    private suspend inline fun <reified T> decode(response: HttpResponse): T {
+        val text = response.bodyAsText()
+        if (!response.status.isSuccess()) throw PhotoSourceException("Immich ${response.status}: ${text.take(200)}")
+        return json.decodeFromString(text)
+    }
+}
+
+/**
+ * Serves a frame's album: the asset list is cached for a few minutes, preview
+ * images on disk. Frames may only fetch assets that are in their album.
+ */
+class PhotoService(
+    private val source: PhotoSource,
+    cacheDir: String,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+    private val previews = File(cacheDir, "previews").apply { mkdirs() }
+    private val albums = mutableMapOf<String, Pair<Long, List<SlideshowPhoto>>>()
+    private val mutex = Mutex()
+
+    suspend fun albums() = source.albums()
+
+    suspend fun slideshow(albumId: String): List<SlideshowPhoto> = mutex.withLock {
+        val cached = albums[albumId]
+        if (cached != null && clock() - cached.first < ALBUM_TTL_MS) return cached.second
+        val photos = source.albumPhotos(albumId)
+        albums[albumId] = clock() to photos
+        photos
+    }
+
+    suspend fun preview(albumId: String, assetId: String): ByteArray? {
+        if (slideshow(albumId).none { it.id == assetId }) return null
+        // asset ids are UUIDs; anything else must never reach the file system
+        if (!assetId.matches(Regex("[0-9a-fA-F-]{36}"))) return null
+        val file = File(previews, "$assetId.jpg")
+        if (file.exists()) return withContext(Dispatchers.IO) { file.readBytes() }
+        val bytes = source.preview(assetId)
+        withContext(Dispatchers.IO) {
+            val partial = File(previews, "$assetId.part")
+            partial.writeBytes(bytes)
+            partial.renameTo(file)
+        }
+        return bytes
+    }
+
+    private companion object {
+        const val ALBUM_TTL_MS = 5 * 60 * 1000L
+    }
+}

@@ -1,0 +1,8 @@
+**/.gradle
+**/build
+**/node_modules
+.git
+.idea
+google-services.json
+**/google-services.json
+android
