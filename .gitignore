@@ -1,0 +1,17 @@
+# Firebase client config, injected in CI from GOOGLE_SERVICES_JSON_B64
+google-services.json
+
+# signing keys never belong in the repo
+*.jks
+*.keystore
+*.p12
+
+# build output
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+node_modules/
+dist/
+.env
