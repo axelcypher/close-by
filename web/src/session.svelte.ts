@@ -27,6 +27,7 @@ let room: Room | null = null;
 let socket: WebSocket | null = null;
 let retryMs = 1000;
 let endedTimer: ReturnType<typeof setTimeout> | undefined;
+let peerTimer: ReturnType<typeof setTimeout> | undefined;
 
 // ---- session ----
 
@@ -195,9 +196,14 @@ async function joinRoom(url: string, token: string) {
     if (call.remoteVideo === track) call.remoteVideo = null;
   });
   current.on(RoomEvent.ParticipantDisconnected, () => {
-    // the other side is gone without a proper hang-up (crash, network)
-    if (call.state.phase === "active") hangUp();
+    // the other side is gone without a proper hang-up (crash, network);
+    // give it a moment to come back before giving up
+    clearTimeout(peerTimer);
+    peerTimer = setTimeout(() => {
+      if (room === current && current.remoteParticipants.size === 0 && call.state.phase === "active") hangUp();
+    }, 15_000);
   });
+  current.on(RoomEvent.ParticipantConnected, () => clearTimeout(peerTimer));
   await current.connect(url, token);
   call.micOn = true;
   call.camOn = true;
@@ -207,6 +213,7 @@ async function joinRoom(url: string, token: string) {
 
 function finish(peer: string, message: string) {
   ringer.stop();
+  clearTimeout(peerTimer);
   room?.disconnect();
   room = null;
   call.remoteVideo = null;

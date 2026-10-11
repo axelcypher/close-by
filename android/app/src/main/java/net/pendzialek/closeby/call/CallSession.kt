@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -32,6 +33,7 @@ class CallSession(private val context: Context, private val api: Api) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var room: Room? = null
     private var eventsJob: Job? = null
+    private var peerLeftJob: Job? = null
 
     private val _remoteVideo = MutableStateFlow<VideoTrack?>(null)
     val remoteVideo: StateFlow<VideoTrack?> = _remoteVideo
@@ -66,7 +68,8 @@ class CallSession(private val context: Context, private val api: Api) {
                 when (event) {
                     is RoomEvent.TrackSubscribed -> (event.track as? VideoTrack)?.let { _remoteVideo.value = it }
                     is RoomEvent.TrackUnsubscribed -> if (event.track == _remoteVideo.value) _remoteVideo.value = null
-                    is RoomEvent.ParticipantDisconnected -> onPeerLeft()
+                    is RoomEvent.ParticipantDisconnected -> peerGone()
+                    is RoomEvent.ParticipantConnected -> peerLeftJob?.cancel()
                     else -> Unit
                 }
             }
@@ -78,7 +81,17 @@ class CallSession(private val context: Context, private val api: Api) {
         volumePercent?.let(::setCallVolume)
     }
 
+    /** A dead spot on the train should not end the call: give the other side time to come back. */
+    private fun peerGone() {
+        peerLeftJob?.cancel()
+        peerLeftJob = scope.launch {
+            delay(PEER_GRACE_MS)
+            if (room?.remoteParticipants.isNullOrEmpty()) onPeerLeft()
+        }
+    }
+
     fun leave() {
+        peerLeftJob?.cancel()
         eventsJob?.cancel()
         eventsJob = null
         _remoteVideo.value = null
@@ -92,5 +105,9 @@ class CallSession(private val context: Context, private val api: Api) {
         val audio = context.getSystemService(AudioManager::class.java)
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
         audio.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (max * percent.coerceIn(0, 100) / 100).coerceAtLeast(1), 0)
+    }
+
+    private companion object {
+        const val PEER_GRACE_MS = 15_000L
     }
 }
