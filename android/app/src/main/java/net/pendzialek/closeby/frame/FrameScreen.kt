@@ -41,7 +41,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 import net.pendzialek.closeby.api.FrameContact
 import net.pendzialek.closeby.api.SlideshowPhoto
@@ -54,7 +53,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Composable
-fun FrameScreen(viewModel: FrameViewModel = viewModel()) {
+fun FrameScreen(viewModel: FrameController) {
     val state by viewModel.state.collectAsState()
     val activity = LocalContext.current as Activity
 

@@ -80,6 +80,10 @@ data class DeviceStatus(
     val battery: Int? = null,
     val charging: Boolean? = null,
     val wifiRssi: Int? = null,
+    /** The app is device owner: kiosk, silent updates and permissions without prompts work. */
+    val deviceOwner: Boolean? = null,
+    /** The frame is locked to CloseBy right now (false during maintenance). */
+    val kiosk: Boolean? = null,
 )
 
 @Serializable
@@ -217,7 +221,20 @@ object EventTypes {
     const val CONFIG_CHANGED = "config.changed"
     /** A device came online or went offline; carries [Event.deviceId] and [Event.online]. */
     const val PRESENCE_CHANGED = "presence.changed"
+    /** Admin command for a frame; carries [Event.command], see [FrameCommands]. */
+    const val FRAME_COMMAND = "frame.command"
 }
+
+object FrameCommands {
+    /** Leave the kiosk for ten minutes, e.g. to change Wi-Fi on site. */
+    const val MAINTENANCE = "maintenance"
+    /** Look for a new app version right away. */
+    const val UPDATE = "update"
+    val all = setOf(MAINTENANCE, UPDATE)
+}
+
+@Serializable
+data class FrameCommandRequest(val command: String)
 
 object EndReasons {
     const val HANGUP = "hangup"
@@ -237,6 +254,7 @@ data class Event(
     val reason: String? = null,
     val deviceId: String? = null,
     val online: Boolean? = null,
+    val command: String? = null,
 )
 
 // ---- app updates ----

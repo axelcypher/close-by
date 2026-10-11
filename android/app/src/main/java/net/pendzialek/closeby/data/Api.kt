@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import net.pendzialek.closeby.api.ApiError
+import net.pendzialek.closeby.api.AppRelease
 import net.pendzialek.closeby.api.CallJoin
 import net.pendzialek.closeby.api.DeviceKind
 import net.pendzialek.closeby.api.FrameConfig
@@ -67,6 +68,9 @@ class Api(private val prefs: Prefs, cacheDir: File) {
 
     suspend fun pollPairing(id: String, pollSecret: String): PairingStatus =
         call(request("/api/pairing/$id").header("X-Poll-Secret", pollSecret).get().build(), PairingStatus.serializer())
+
+    /** The APK the backend ships; throws when none is published. */
+    suspend fun latestRelease(): AppRelease = get("/api/app/android", AppRelease.serializer())
 
     // ---- device ----
 

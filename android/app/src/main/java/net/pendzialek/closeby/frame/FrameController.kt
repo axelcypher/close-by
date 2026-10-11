@@ -1,14 +1,15 @@
 package net.pendzialek.closeby.frame
 
-import android.app.Application
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.BatteryManager
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import net.pendzialek.closeby.api.FrameContact
 import net.pendzialek.closeby.api.SlideshowPhoto
 import net.pendzialek.closeby.api.StatusReport
 import net.pendzialek.closeby.data.ApiException
+import net.pendzialek.closeby.device.DeviceOwner
 import java.time.LocalTime
 
 enum class FrameView { CONTACTS, SLIDESHOW, NIGHT }
@@ -45,8 +47,12 @@ data class FrameState(
     val connected: Boolean = false,
 )
 
-class FrameViewModel(application: Application) : AndroidViewModel(application) {
-    private val app = application as CloseByApp
+/**
+ * Everything a frame does, independent of whether its screen is visible:
+ * lives as long as the app is paired as frame, kept alive by [FrameService].
+ */
+class FrameController(private val app: CloseByApp) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val api = app.api
     val images = app.images
     val callSession = app.callSession
@@ -57,30 +63,36 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
     private var lastTouch = System.currentTimeMillis()
     private var ringtone: Ringtone? = null
 
-    init {
+    /** Shows the incoming call when the activity is in the background. */
+    var onIncomingWhileHidden: (name: String) -> Unit = {}
+
+    /** Admin commands from the web client, handled by the activity (kiosk) and [Updater]. */
+    var onCommand: (String) -> Unit = {}
+
+    fun start() {
         app.realtime.start()
         callSession.onPeerLeft = { if (_state.value.call is CallUi.Active) hangUp() }
-        viewModelScope.launch { app.realtime.events.collect(::onEvent) }
-        viewModelScope.launch {
+        scope.launch { app.realtime.events.collect(::onEvent) }
+        scope.launch {
             app.realtime.connected.collect { connected ->
                 _state.update { it.copy(connected = connected) }
                 // whatever changed while offline was not announced to us
                 if (connected) refresh()
             }
         }
-        viewModelScope.launch {
+        scope.launch {
             while (true) {
                 tick()
                 delay(1_000)
             }
         }
-        viewModelScope.launch {
+        scope.launch {
             while (true) {
                 reportStatus()
                 delay(5 * 60_000)
             }
         }
-        viewModelScope.launch {
+        scope.launch {
             // new photos in the album show up without a config change
             while (true) {
                 delay(30 * 60_000)
@@ -120,7 +132,12 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
-        val status = DeviceStatus(battery = if (level >= 0) level * 100 / scale else null, charging = plugged)
+        val status = DeviceStatus(
+            battery = if (level >= 0) level * 100 / scale else null,
+            charging = plugged,
+            deviceOwner = DeviceOwner.isActive(app),
+            kiosk = app.kioskActive,
+        )
         runCatching { api.reportStatus(StatusReport(BuildConfig.VERSION_CODE, status)) }
     }
 
@@ -153,7 +170,7 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.call != CallUi.None) return
         touched()
         _state.update { it.copy(call = CallUi.Outgoing(contact)) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val join = api.startCall(contact.personId)
                 if (_state.value.call !is CallUi.Outgoing) {
@@ -175,7 +192,7 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
         val incoming = _state.value.call as? CallUi.Incoming ?: return
         stopRinging()
         _state.update { it.copy(call = CallUi.Active(incoming.callId, incoming.name)) }
-        viewModelScope.launch {
+        scope.launch {
             try {
                 callSession.join(api.acceptCall(incoming.callId), _state.value.config?.settings?.volume)
             } catch (_: Exception) {
@@ -188,7 +205,7 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
         val incoming = _state.value.call as? CallUi.Incoming ?: return
         stopRinging()
         _state.update { it.copy(call = CallUi.None) }
-        viewModelScope.launch { runCatching { api.declineCall(incoming.callId) } }
+        scope.launch { runCatching { api.declineCall(incoming.callId) } }
     }
 
     fun hangUp() {
@@ -206,21 +223,23 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
             else -> ""
         }
         finish(name, "Gespräch beendet")
-        if (callId != null) viewModelScope.launch { runCatching { api.endCall(callId) } }
+        if (callId != null) scope.launch { runCatching { api.endCall(callId) } }
     }
 
     private fun onEvent(event: Event) {
         val call = _state.value.call
         when (event.type) {
-            EventTypes.CONFIG_CHANGED -> viewModelScope.launch { refresh() }
+            EventTypes.CONFIG_CHANGED -> scope.launch { refresh() }
+            EventTypes.FRAME_COMMAND -> event.command?.let(onCommand)
             EventTypes.CALL_INCOMING -> {
                 val from = event.from ?: return
                 if (call != CallUi.None && call !is CallUi.Ended) return // busy; the backend times it out
                 touched()
+                if (!app.uiVisible) onIncomingWhileHidden(from.name)
                 val auto = event.autoAnswer == true
                 _state.update { it.copy(call = CallUi.Incoming(event.callId!!, from.name, from.id, auto)) }
                 if (auto) {
-                    viewModelScope.launch {
+                    scope.launch {
                         delay(3_000)
                         if ((_state.value.call as? CallUi.Incoming)?.callId == event.callId) accept()
                     }
@@ -255,7 +274,7 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
         stopRinging()
         callSession.leave()
         _state.update { it.copy(call = CallUi.Ended(name, message)) }
-        viewModelScope.launch {
+        scope.launch {
             delay(4_000)
             if (_state.value.call is CallUi.Ended) {
                 _state.update { it.copy(call = CallUi.None) }
@@ -280,10 +299,12 @@ class FrameViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopRinging() {
         ringtone?.stop()
         ringtone = null
+        FrameService.clearIncoming(app)
     }
 
-    override fun onCleared() {
+    fun stop() {
         stopRinging()
         callSession.leave()
+        scope.cancel()
     }
 }

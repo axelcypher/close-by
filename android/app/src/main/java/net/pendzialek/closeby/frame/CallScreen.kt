@@ -45,7 +45,7 @@ import net.pendzialek.closeby.ui.Ok
 private val Dark = Color(0xFF151515)
 
 @Composable
-fun CallScreen(call: CallUi, viewModel: FrameViewModel) {
+fun CallScreen(call: CallUi, viewModel: FrameController) {
     // swallow touches so nothing behind the overlay reacts
     Box(Modifier.fillMaxSize().background(Dark).pointerInput(Unit) {}) {
         when (call) {
@@ -77,7 +77,7 @@ fun CallScreen(call: CallUi, viewModel: FrameViewModel) {
 private fun Prompt(
     name: String,
     avatarContact: FrameContact?,
-    viewModel: FrameViewModel,
+    viewModel: FrameController,
     label: String,
     buttons: @Composable () -> Unit,
 ) {
@@ -104,7 +104,7 @@ private fun Prompt(
 }
 
 @Composable
-private fun ActiveCall(call: CallUi.Active, viewModel: FrameViewModel) {
+private fun ActiveCall(call: CallUi.Active, viewModel: FrameController) {
     val remote by viewModel.callSession.remoteVideo.collectAsState()
     val local by viewModel.callSession.localVideo.collectAsState()
     val room = viewModel.callSession.currentRoom

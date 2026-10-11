@@ -66,6 +66,28 @@ tokens must not end up in access logs as query strings). Server events:
 `call.incoming`, `call.accepted`, `call.declined`, `call.ended`, `call.taken`,
 `config.changed`.
 
+Further events: `presence.changed` (a device came online or went offline,
+broadcast to every connected device) and `frame.command` (admin command for a
+frame: `maintenance` lifts the kiosk for ten minutes, `update` looks for a new
+APK right away).
+
+## Frames on a tablet
+
+The frame works on any Android device, but a dedicated tablet should run
+CloseBy as **device owner** (set once via adb on a device without accounts):
+
+```bash
+adb shell dpm set-device-owner net.pendzialek.closeby/.device.AdminReceiver
+```
+
+Then CloseBy is the home screen and runs in lock task mode (kiosk), camera,
+microphone and notifications are granted without prompts, the keyguard and
+status bar are off, the screen stays on while plugged in, and updates install
+silently (checked every 6 hours and on `frame.command update`). A foreground
+service keeps the websocket alive; an incoming call while the UI is hidden
+shows a full-screen notification. Without device owner the frame still works,
+but asks for permissions and update confirmations.
+
 ## Photos
 
 The backend reads the frame's Immich album with its own API key, caches the

@@ -51,6 +51,17 @@
     }
   }
 
+  async function command(kind: "maintenance" | "update") {
+    error = "";
+    try {
+      await api.admin.frameCommand(frame.device.id, kind);
+      saved = kind === "maintenance" ? "Kiosk ist für 10 Minuten aufgehoben." : "Der Rahmen sucht jetzt nach einem Update.";
+      setTimeout(() => (saved = ""), 5000);
+    } catch (e) {
+      error = (e as Error).message === "frame offline" ? "Der Rahmen ist offline." : (e as Error).message;
+    }
+  }
+
   async function remove() {
     await api.admin.deleteDevice(frame.device.id);
     onChanged();
@@ -69,6 +80,7 @@
       {frame.device.online ? "online" : `zuletzt ${lastSeen(frame.device.lastSeen)}`}
       {#if frame.device.status?.battery != null}· Akku {frame.device.status.battery} %{frame.device.status.charging ? " ⚡" : ""}{/if}
       {#if frame.device.appVersion}· App {frame.device.appVersion}{/if}
+      {#if frame.device.status?.deviceOwner}· {frame.device.status.kiosk ? "Kiosk" : "Kiosk aufgehoben"}{:else if frame.device.status}· kein Device Owner{/if}
     </span>
   </div>
 
@@ -137,6 +149,10 @@
     <button class="primary" onclick={save}>Speichern</button>
     {#if saved}<span class="muted">{saved}</span>{/if}
     {#if error}<span class="error">{error}</span>{/if}
+    <button onclick={() => command("update")} disabled={!frame.device.online}>Nach Update suchen</button>
+    {#if frame.device.status?.deviceOwner}
+      <button onclick={() => command("maintenance")} disabled={!frame.device.online}>Wartungsmodus (10 min)</button>
+    {/if}
     <span class="grow"></span>
     {#if confirmRemove}
       <span>Rahmen wirklich entfernen?</span>

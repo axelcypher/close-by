@@ -33,6 +33,8 @@ import net.pendzialek.closeby.api.DeviceKind
 import net.pendzialek.closeby.api.Event
 import net.pendzialek.closeby.api.EventTypes
 import net.pendzialek.closeby.api.FrameAdmin
+import net.pendzialek.closeby.api.FrameCommandRequest
+import net.pendzialek.closeby.api.FrameCommands
 import net.pendzialek.closeby.api.FrameConfig
 import net.pendzialek.closeby.api.FrameSettings
 import net.pendzialek.closeby.api.FrameUpdate
@@ -325,6 +327,24 @@ class BackendTest {
             assertEquals(true, event.online)
             listener.cancel()
         }
+    }
+
+    @Test
+    fun `frame commands need a known command and an online frame`() = test { client ->
+        val admin = client.admin()
+        val frame = client.pairFrame(admin)
+        val unknown = client.post("/api/admin/frames/${frame.deviceId}/command") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(FrameCommandRequest("reboot"))
+        }
+        assertEquals(HttpStatusCode.BadRequest, unknown.status)
+        val offline = client.post("/api/admin/frames/${frame.deviceId}/command") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(FrameCommandRequest(FrameCommands.UPDATE))
+        }
+        assertEquals(HttpStatusCode.Conflict, offline.status)
     }
 
     @Test

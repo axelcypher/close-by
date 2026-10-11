@@ -39,6 +39,8 @@ import net.pendzialek.closeby.api.DeviceKind
 import net.pendzialek.closeby.api.Event
 import net.pendzialek.closeby.api.EventTypes
 import net.pendzialek.closeby.api.FrameAdmin
+import net.pendzialek.closeby.api.FrameCommandRequest
+import net.pendzialek.closeby.api.FrameCommands
 import net.pendzialek.closeby.api.FrameConfig
 import net.pendzialek.closeby.api.FrameContact
 import net.pendzialek.closeby.api.FrameContactEntry
@@ -355,6 +357,16 @@ private fun Route.adminRoutes(services: Services) {
         if (contacts.map { it.personId }.toSet().size != contacts.size) badRequest("duplicate person")
         store.setFrameContacts(frame.deviceId, contacts)
         services.notifyFrame(frame.deviceId)
+        call.respond(HttpStatusCode.NoContent)
+    }
+
+    post("/frames/{id}/command") {
+        call.requireAdmin(services)
+        val frame = store.frame(call.parameters["id"]!!) ?: notFound()
+        val command = call.receive<FrameCommandRequest>().command
+        if (command !in FrameCommands.all) badRequest("unknown command")
+        val delivered = services.hub.send(frame.deviceId, Event(EventTypes.FRAME_COMMAND, command = command))
+        if (!delivered) throw ApiException(HttpStatusCode.Conflict, "frame offline")
         call.respond(HttpStatusCode.NoContent)
     }
 

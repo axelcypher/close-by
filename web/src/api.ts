@@ -7,7 +7,13 @@ export interface PairingStartResponse { pairingId: string; code: string; pollSec
 export interface PairingStatus { state: "pending" | "done"; token?: string; deviceId?: string; personId?: string }
 export interface InviteResponse { code: string; url: string; expiresAt: number }
 
-export interface DeviceStatus { battery?: number; charging?: boolean; wifiRssi?: number }
+export interface DeviceStatus {
+  battery?: number;
+  charging?: boolean;
+  wifiRssi?: number;
+  deviceOwner?: boolean;
+  kiosk?: boolean;
+}
 export interface DeviceInfo {
   id: string;
   kind: DeviceKind;
@@ -128,6 +134,8 @@ export const api = {
       request<void>("PUT", `/api/admin/persons/${id}`, body),
     deletePerson: (id: string) => request<void>("DELETE", `/api/admin/persons/${id}`),
     deleteDevice: (id: string) => request<void>("DELETE", `/api/admin/devices/${id}`),
+    frameCommand: (id: string, command: "maintenance" | "update") =>
+      request<void>("POST", `/api/admin/frames/${id}/command`, { command }),
     invite: () => request<InviteResponse>("POST", "/api/admin/invites"),
     albums: () => request<ImmichAlbum[]>("GET", "/api/admin/immich/albums"),
   },
