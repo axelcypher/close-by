@@ -103,6 +103,10 @@
         <label>Bildwechsel (s) <input type="number" min="5" max="600" bind:value={settings.slideshowIntervalSeconds} /></label>
         <label>Diashow nach (s) <input type="number" min="10" max="3600" bind:value={settings.idleTimeoutSeconds} /></label>
       </div>
+      <label>
+        Gesprächslautstärke in % (leer = Gerät bestimmt)
+        <input type="number" min="0" max="100" bind:value={settings.volume} placeholder="z. B. 90" />
+      </label>
       <label class="check"><input type="checkbox" bind:checked={nightMode} /> Nachtmodus (Bildschirm dunkel)</label>
       {#if nightMode}
         <div class="row two">
