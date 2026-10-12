@@ -1,6 +1,8 @@
 package net.pendzialek.closeby.frame
 
 import android.app.Activity
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import net.pendzialek.closeby.CloseByApp
 import net.pendzialek.closeby.api.FrameContact
 import net.pendzialek.closeby.call.CallScreen
 import net.pendzialek.closeby.call.CallUi
@@ -94,6 +98,33 @@ fun FrameScreen(viewModel: FrameController) {
         if (state.call != CallUi.None) {
             CallScreen(state.call, viewModel)
         }
+
+        MaintenanceBar(Modifier.align(Alignment.TopCenter))
+    }
+}
+
+/** Only during a maintenance window (admin command): a way into the Android settings. */
+@Composable
+private fun MaintenanceBar(modifier: Modifier) {
+    val context = LocalContext.current
+    val app = context.applicationContext as CloseByApp
+    val until by app.maintenanceUntil.collectAsState()
+    if (until <= System.currentTimeMillis()) return
+    val end = java.time.Instant.ofEpochMilli(until).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+    Row(
+        modifier
+            .padding(16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF2F2F2F))
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text("Wartung bis ${end.format(DateTimeFormatter.ofPattern("HH:mm"))}", color = Color.White, fontSize = 18.sp)
+        Button(onClick = {
+            context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }) { Text("Android-Einstellungen") }
+        Button(onClick = { app.endMaintenance() }) { Text("Wartung beenden") }
     }
 }
 

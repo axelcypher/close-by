@@ -134,7 +134,7 @@ export const api = {
       request<void>("PUT", `/api/admin/persons/${id}`, body),
     deletePerson: (id: string) => request<void>("DELETE", `/api/admin/persons/${id}`),
     deleteDevice: (id: string) => request<void>("DELETE", `/api/admin/devices/${id}`),
-    frameCommand: (id: string, command: "maintenance" | "update") =>
+    frameCommand: (id: string, command: "maintenance" | "update" | "release") =>
       request<void>("POST", `/api/admin/frames/${id}/command`, { command }),
     invite: () => request<InviteResponse>("POST", "/api/admin/invites"),
     albums: () => request<ImmichAlbum[]>("GET", "/api/admin/immich/albums"),

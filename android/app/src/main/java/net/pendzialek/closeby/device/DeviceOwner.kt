@@ -27,6 +27,30 @@ object DeviceOwner {
     fun isActive(context: Context): Boolean =
         context.getSystemService(DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName)
 
+    /** During maintenance the status bar comes back, so Android settings are reachable. */
+    fun setMaintenance(context: Context, active: Boolean) {
+        if (!isActive(context)) return
+        val dpm = context.getSystemService(DevicePolicyManager::class.java)
+        dpm.setStatusBarDisabled(ComponentName(context, AdminReceiver::class.java), !active)
+    }
+
+    /**
+     * Undoes everything and gives up device owner, so no factory reset is
+     * needed. The caller must have left lock task mode before.
+     */
+    fun release(context: Context) {
+        if (!isActive(context)) return
+        val dpm = context.getSystemService(DevicePolicyManager::class.java)
+        val admin = ComponentName(context, AdminReceiver::class.java)
+        dpm.setLockTaskPackages(admin, emptyArray())
+        dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
+        dpm.setStatusBarDisabled(admin, false)
+        dpm.setKeyguardDisabled(admin, false)
+        dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, "0")
+        @Suppress("DEPRECATION")
+        dpm.clearDeviceOwnerApp(context.packageName)
+    }
+
     fun applyFramePolicies(context: Context) {
         if (!isActive(context)) return
         val dpm = context.getSystemService(DevicePolicyManager::class.java)

@@ -45,6 +45,14 @@ class MainActivity : ComponentActivity() {
                 val mode by app.mode.collectAsState()
                 val maintenanceUntil by app.maintenanceUntil.collectAsState()
                 LaunchedEffect(mode) { applyWindowMode(mode) }
+                val releaseRequested by app.releaseRequested.collectAsState()
+                LaunchedEffect(releaseRequested) {
+                    if (!releaseRequested) return@LaunchedEffect
+                    // lock task has to end before device owner can go
+                    if (isLocked()) stopLockTask()
+                    app.releaseDeviceOwner()
+                    app.kioskActive = false
+                }
                 LaunchedEffect(mode, maintenanceUntil) {
                     if (mode != AppMode.FRAME) return@LaunchedEffect
                     updateKiosk()
@@ -75,6 +83,12 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == CallNotifications.ACTION_ACCEPT) app.contactController?.accept()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // coming back from the Android settings after maintenance
+        if (app.mode.value == AppMode.FRAME) updateKiosk()
+    }
+
     override fun onStart() {
         super.onStart()
         app.uiVisible = true
@@ -97,6 +111,8 @@ class MainActivity : ComponentActivity() {
             insets.hide(WindowInsetsCompat.Type.systemBars())
             app.ensureFrameRunning()
             DeviceOwner.applyFramePolicies(this)
+            // a restart during maintenance must not lock the status bar again
+            DeviceOwner.setMaintenance(this, app.maintenanceUntil.value > System.currentTimeMillis())
             requestMissingPermissions()
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -108,12 +124,15 @@ class MainActivity : ComponentActivity() {
 
     /** Device owner frames are locked to CloseBy, except during a maintenance window. */
     private fun updateKiosk() {
-        val locked = getSystemService(ActivityManager::class.java).lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
+        val locked = isLocked()
         val wanted = DeviceOwner.isActive(this) && System.currentTimeMillis() >= app.maintenanceUntil.value
         if (wanted && !locked) startLockTask()
         if (!wanted && locked) stopLockTask()
         app.kioskActive = wanted
     }
+
+    private fun isLocked() =
+        getSystemService(ActivityManager::class.java).lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
 
     private fun requestMissingPermissions() {
         requestPermissions(includeCamera = true)

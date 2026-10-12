@@ -1,6 +1,7 @@
 package net.pendzialek.closeby
 
 import android.app.Application
+import android.content.Intent
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +23,7 @@ import net.pendzialek.closeby.device.DeviceOwner
 import net.pendzialek.closeby.device.Updater
 import net.pendzialek.closeby.frame.FrameController
 import net.pendzialek.closeby.frame.FrameService
+import net.pendzialek.closeby.ui.MainActivity
 
 /** Process-wide objects. The frame lives as long as the process, so do its connections. */
 class CloseByApp : Application() {
@@ -114,8 +116,51 @@ class CloseByApp : Application() {
     private fun onFrameCommand(command: String) {
         when (command) {
             FrameCommands.UPDATE -> scope.launch { Log.i("CloseBy", "update: ${updater.checkAndInstall()}") }
-            FrameCommands.MAINTENANCE -> _maintenanceUntil.value = System.currentTimeMillis() + 10 * 60_000L
+            FrameCommands.MAINTENANCE -> startMaintenance()
+            FrameCommands.RELEASE -> _releaseRequested.value = true
         }
+    }
+
+    private val _releaseRequested = MutableStateFlow(false)
+    /** The activity leaves lock task mode and then calls [releaseDeviceOwner]. */
+    val releaseRequested: StateFlow<Boolean> = _releaseRequested
+
+    fun releaseDeviceOwner() {
+        DeviceOwner.release(this)
+        _releaseRequested.value = false
+        _maintenanceUntil.value = 0
+    }
+
+    private var maintenanceJob: Job? = null
+
+    fun startMaintenance() {
+        _maintenanceUntil.value = System.currentTimeMillis() + MAINTENANCE_MS
+        DeviceOwner.setMaintenance(this, true)
+        maintenanceJob?.cancel()
+        maintenanceJob = scope.launch {
+            delay(MAINTENANCE_MS)
+            endMaintenance()
+        }
+    }
+
+    /** Back to kiosk, also when someone is still in the Android settings. */
+    fun endMaintenance() {
+        maintenanceJob?.cancel()
+        _maintenanceUntil.value = 0
+        DeviceOwner.setMaintenance(this, false)
+        if (_mode.value == AppMode.FRAME) {
+            // device owners may start activities from the background
+            runCatching {
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+                )
+            }
+        }
+    }
+
+    private companion object {
+        const val MAINTENANCE_MS = 10 * 60_000L
     }
 
     fun paired(mode: AppMode, token: String, deviceId: String) {

@@ -230,7 +230,9 @@ object FrameCommands {
     const val MAINTENANCE = "maintenance"
     /** Look for a new app version right away. */
     const val UPDATE = "update"
-    val all = setOf(MAINTENANCE, UPDATE)
+    /** Give up device owner: kiosk off, policies cleared, a normal Android tablet again. */
+    const val RELEASE = "release"
+    val all = setOf(MAINTENANCE, UPDATE, RELEASE)
 }
 
 @Serializable

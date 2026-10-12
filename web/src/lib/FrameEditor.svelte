@@ -51,11 +51,20 @@
     }
   }
 
-  async function command(kind: "maintenance" | "update") {
+  let confirmRelease = $state(false);
+
+  const commandMessages = {
+    maintenance: "Kiosk ist für 10 Minuten aufgehoben, am Rahmen gibt es jetzt einen Knopf für die Android-Einstellungen.",
+    update: "Der Rahmen sucht jetzt nach einem Update.",
+    release: "Device Owner ist aufgehoben, das Tablet ist wieder ein normales Android-Gerät.",
+  };
+
+  async function command(kind: "maintenance" | "update" | "release") {
     error = "";
+    confirmRelease = false;
     try {
       await api.admin.frameCommand(frame.device.id, kind);
-      saved = kind === "maintenance" ? "Kiosk ist für 10 Minuten aufgehoben." : "Der Rahmen sucht jetzt nach einem Update.";
+      saved = commandMessages[kind];
       setTimeout(() => (saved = ""), 5000);
     } catch (e) {
       error = (e as Error).message === "frame offline" ? "Der Rahmen ist offline." : (e as Error).message;
@@ -156,6 +165,13 @@
     <button onclick={() => command("update")} disabled={!frame.device.online}>Nach Update suchen</button>
     {#if frame.device.status?.deviceOwner}
       <button onclick={() => command("maintenance")} disabled={!frame.device.online}>Wartungsmodus (10 min)</button>
+      {#if confirmRelease}
+        <span>Kiosk, Rechte und Startbildschirm zurücksetzen?</span>
+        <button class="danger" onclick={() => command("release")}>Ja, Device Owner aufheben</button>
+        <button onclick={() => (confirmRelease = false)}>Nein</button>
+      {:else}
+        <button onclick={() => (confirmRelease = true)} disabled={!frame.device.online}>Device Owner aufheben</button>
+      {/if}
     {/if}
     <span class="grow"></span>
     {#if confirmRemove}
