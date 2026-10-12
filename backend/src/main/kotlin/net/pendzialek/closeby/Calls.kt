@@ -42,6 +42,7 @@ class Calls(
     ) {
         var state = State.RINGING
         var answeredBy: String? = null
+        var answeredAt = 0L
         var timeout: Job? = null
 
         fun involves(deviceId: String) = caller.id == deviceId || callees.any { it.id == deviceId }
@@ -50,12 +51,39 @@ class Calls(
     private val calls = mutableMapOf<String, Call>()
     private val mutex = Mutex()
 
+    init {
+        // a call whose clients vanished without hanging up would block both sides as "busy"
+        scope.launch {
+            while (true) {
+                delay(STALE_CHECK_MS)
+                reapStale { true }
+            }
+        }
+    }
+
+    /** Ends active calls whose LiveKit room is empty. */
+    private suspend fun reapStale(filter: (Call) -> Boolean) {
+        val now = System.currentTimeMillis()
+        val candidates = mutex.withLock {
+            calls.values.filter { it.state == State.ACTIVE && now - it.answeredAt >= config.staleCallGraceMs && filter(it) }
+        }
+        for (call in candidates) {
+            if (rooms.participantCount(call.id) != 0) continue
+            val removed = mutex.withLock { calls[call.id]?.let(::remove) } ?: continue
+            notify(listOf(removed.caller) + removed.callees, ended(removed.id, EndReasons.HANGUP))
+            rooms.close(removed.id)
+        }
+    }
+
     suspend fun start(device: Device, request: StartCallRequest): CallJoin {
         val call = when (device.kind) {
             DeviceKind.FRAME -> frameCallsPerson(device, request.personId ?: badRequest("personId missing"))
             else -> personCallsFrame(device, request.frameId ?: badRequest("frameId missing"))
         }
         if (call.callees.isEmpty()) throw ApiException(HttpStatusCode.Conflict, "unreachable")
+        // before answering "busy", make sure the blocking call is still real
+        val involved = call.callees.map { it.id }.toSet() + device.id
+        reapStale { live -> involved.any(live::involves) }
 
         mutex.withLock {
             val busy = calls.values.any { live -> live.involves(device.id) || call.callees.any { live.involves(it.id) } }
@@ -81,6 +109,7 @@ class Calls(
             if (call.state != State.RINGING) throw ApiException(HttpStatusCode.Conflict, "already answered")
             call.state = State.ACTIVE
             call.answeredBy = device.id
+            call.answeredAt = System.currentTimeMillis()
             call.timeout?.cancel()
             call to call.callees.filter { it.id != device.id }
         }
@@ -185,6 +214,8 @@ class Calls(
         reason?.let { put("reason", it) }
     }
 }
+
+private const val STALE_CHECK_MS = 30_000L
 
 fun notFound(): Nothing = throw ApiException(HttpStatusCode.NotFound, "not found")
 fun badRequest(message: String): Nothing = throw ApiException(HttpStatusCode.BadRequest, message)

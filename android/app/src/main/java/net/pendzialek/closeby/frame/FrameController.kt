@@ -87,9 +87,10 @@ class FrameController(private val app: CloseByApp) : CallController {
             }
         }
         scope.launch {
-            // new photos in the album show up without a config change
+            // new photos show up without a config change; an empty or failed
+            // slideshow (e.g. Immich was down) is retried every minute
             while (true) {
-                delay(30 * 60_000)
+                delay(if (slideshowOk && _state.value.photos.isNotEmpty()) 30 * 60_000L else 60_000L)
                 loadSlideshow()
             }
         }
@@ -115,10 +116,15 @@ class FrameController(private val app: CloseByApp) : CallController {
         }
     }
 
+    private var slideshowOk = false
+
     private suspend fun loadSlideshow() {
-        runCatching { api.slideshow() }.onSuccess { slideshow ->
-            _state.update { it.copy(photos = slideshow.photos.shuffled()) }
-        }
+        runCatching { api.slideshow() }
+            .onSuccess { slideshow ->
+                slideshowOk = true
+                _state.update { it.copy(photos = slideshow.photos.shuffled()) }
+            }
+            .onFailure { slideshowOk = false }
     }
 
     private suspend fun reportStatus() {

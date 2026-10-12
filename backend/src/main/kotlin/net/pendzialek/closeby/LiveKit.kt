@@ -4,9 +4,15 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.isSuccess
 import io.ktor.http.contentType
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
@@ -21,6 +27,9 @@ interface Rooms {
 
     /** Disconnects everyone; best effort. */
     suspend fun close(room: String)
+
+    /** Participants in [room] right now; null if LiveKit could not be asked. */
+    suspend fun participantCount(room: String): Int?
 }
 
 /** LiveKit access tokens are HS256 JWTs signed with the API secret. */
@@ -53,6 +62,33 @@ class LiveKitRooms(
                 setBody(buildJsonObject { put("room", room) }.toString())
             }
         }.onFailure { log.warn("closing room {} failed: {}", room, it.message) }
+    }
+
+    override suspend fun participantCount(room: String): Int? {
+        val token = sign(
+            buildJsonObject {
+                putJsonObject("video") {
+                    put("roomAdmin", true)
+                    put("room", room)
+                }
+            },
+        )
+        return runCatching {
+            val response = http.post("${config.livekitInternalUrl}/twirp/livekit.RoomService/ListParticipants") {
+                bearerAuth(token)
+                contentType(ContentType.Application.Json)
+                setBody(buildJsonObject { put("room", room) }.toString())
+            }
+            when {
+                // an unknown room has nobody in it
+                response.status == HttpStatusCode.NotFound -> 0
+                !response.status.isSuccess() -> null
+                else -> Json.parseToJsonElement(response.bodyAsText()).jsonObject["participants"]?.jsonArray?.size ?: 0
+            }
+        }.getOrElse {
+            log.warn("listing participants of {} failed: {}", room, it.message)
+            null
+        }
     }
 
     private fun sign(claims: JsonObject): String {

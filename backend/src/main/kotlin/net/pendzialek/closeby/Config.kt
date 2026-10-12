@@ -22,6 +22,8 @@ data class Config(
     val desktopDir: String = "desktop",
     val cacheDir: String = "cache",
     val ringTimeoutSeconds: Long = 45,
+    /** An answered call whose LiveKit room is empty after this long is considered gone. */
+    val staleCallGraceMs: Long = 20_000,
     /** SHA-256 of the APK signing certificate, for Android App Links (`/.well-known/assetlinks.json`). */
     val androidCertSha256: String = "C1:CC:71:B3:FA:EA:B7:B1:A8:AA:8E:8A:CB:95:47:8E:2D:A6:FB:05:9E:F4:93:6C:26:BB:05:F7:11:38:6D:25",
 ) {

@@ -2,6 +2,7 @@ package net.pendzialek.closeby
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -54,7 +55,15 @@ class Services(
             val resolvedRooms = rooms ?: LiveKitRooms(config, http, clock)
             val source = photoSource
                 ?: if (config.immichUrl != null && config.immichApiKey != null) {
-                    ImmichPhotoSource(config.immichUrl, config.immichApiKey, http)
+                    ImmichPhotoSource(config.immichUrl, config.immichApiKey) {
+                        HttpClient(CIO) {
+                            install(HttpTimeout) {
+                                connectTimeoutMillis = 5_000
+                                // uploads of phone photos may take a while
+                                requestTimeoutMillis = 60_000
+                            }
+                        }
+                    }
                 } else {
                     NoPhotoSource
                 }

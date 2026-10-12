@@ -17,6 +17,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -50,8 +51,33 @@ object NoPhotoSource : PhotoSource {
         throw PhotoSourceException("Immich is not configured")
 }
 
-class ImmichPhotoSource(private val baseUrl: String, private val apiKey: String, private val http: HttpClient) : PhotoSource {
+/**
+ * Talks to Immich with its own HTTP client. When a request fails for network
+ * reasons the client is replaced: a connection pool or address resolved while
+ * Immich was still down must not stick until the backend restarts.
+ */
+class ImmichPhotoSource(
+    private val baseUrl: String,
+    private val apiKey: String,
+    private val newClient: () -> HttpClient,
+) : PhotoSource {
     private val json = Json { ignoreUnknownKeys = true }
+
+    @Volatile
+    private var http = newClient()
+
+    private suspend fun <T> guarded(block: suspend () -> T): T = try {
+        block()
+    } catch (e: PhotoSourceException) {
+        throw e
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        val broken = http
+        http = newClient()
+        broken.close()
+        throw PhotoSourceException("Immich unreachable: ${e::class.simpleName} ${e.message}")
+    }
 
     @Serializable
     private data class AlbumDto(
@@ -70,11 +96,12 @@ class ImmichPhotoSource(private val baseUrl: String, private val apiKey: String,
     @Serializable
     private data class SearchAssets(val items: List<AssetDto> = emptyList(), val nextPage: String? = null)
 
-    override suspend fun albums(): List<ImmichAlbum> =
+    override suspend fun albums(): List<ImmichAlbum> = guarded {
         decode<List<AlbumDto>>(http.get("$baseUrl/api/albums") { header("x-api-key", apiKey) })
             .map { ImmichAlbum(it.id, it.albumName, it.assetCount) }
+    }
 
-    override suspend fun albumPhotos(albumId: String): List<SlideshowPhoto> {
+    override suspend fun albumPhotos(albumId: String): List<SlideshowPhoto> = guarded {
         val album = decode<AlbumDto>(
             http.get("$baseUrl/api/albums/$albumId") {
                 header("x-api-key", apiKey)
@@ -83,7 +110,7 @@ class ImmichPhotoSource(private val baseUrl: String, private val apiKey: String,
         )
         // newer Immich versions may leave out the asset list; search by album then
         val assets = album.assets.ifEmpty { if (album.assetCount > 0) searchAlbum(albumId) else emptyList() }
-        return assets.filter { it.type == "IMAGE" }.map { SlideshowPhoto(it.id, it.fileCreatedAt) }
+        assets.filter { it.type == "IMAGE" }.map { SlideshowPhoto(it.id, it.fileCreatedAt) }
     }
 
     private suspend fun searchAlbum(albumId: String): List<AssetDto> = buildList {
@@ -108,19 +135,19 @@ class ImmichPhotoSource(private val baseUrl: String, private val apiKey: String,
         }
     }
 
-    override suspend fun preview(assetId: String): ByteArray {
+    override suspend fun preview(assetId: String): ByteArray = guarded {
         val response = http.get("$baseUrl/api/assets/$assetId/thumbnail") {
             header("x-api-key", apiKey)
             parameter("size", "preview")
         }
         if (!response.status.isSuccess()) throw PhotoSourceException("Immich preview $assetId: ${response.status}")
-        return response.body()
+        response.body<ByteArray>()
     }
 
     @Serializable
     private data class UploadResult(val id: String)
 
-    override suspend fun addToAlbum(albumId: String, image: ByteArray, contentType: String, fileName: String) {
+    override suspend fun addToAlbum(albumId: String, image: ByteArray, contentType: String, fileName: String) = guarded {
         val now = java.time.Instant.now().toString()
         val uploaded = decode<UploadResult>(
             http.submitFormWithBinaryData(

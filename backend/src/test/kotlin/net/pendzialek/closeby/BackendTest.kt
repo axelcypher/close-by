@@ -62,6 +62,8 @@ import kotlin.test.assertTrue
 class BackendTest {
     private class FakeRooms : Rooms {
         val closed = mutableListOf<String>()
+        var participants: Int? = 2
+        override suspend fun participantCount(room: String) = participants
         override fun joinToken(room: String, identity: String, name: String) = "token:$room:$identity"
         override suspend fun close(room: String) {
             closed += room
@@ -101,6 +103,7 @@ class BackendTest {
             cacheDir = dir.resolve("cache").path,
             apkDir = dir.resolve("apk").path,
             webDir = dir.resolve("web").path,
+            staleCallGraceMs = 0,
         )
         val services = Services.create(config, push = push, rooms = rooms, photoSource = photos)
         application { closeby(services) }
@@ -244,6 +247,29 @@ class BackendTest {
             assertEquals(listOf(join.callId), rooms.closed)
             listener.cancel()
         }
+    }
+
+    @Test
+    fun `an answered call with an empty room no longer blocks new calls`() = test { client ->
+        val admin = client.admin()
+        val frame = client.pairFrame(admin)
+        val call: suspend () -> HttpResponse = {
+            client.post("/api/calls") {
+                bearerAuth(frame.token)
+                contentType(ContentType.Application.Json)
+                setBody(StartCallRequest(personId = admin.personId))
+            }
+        }
+        val first: CallJoin = call().body()
+        client.post("/api/calls/${first.callId}/accept") { bearerAuth(admin.token) }
+
+        // both still in the room: busy
+        rooms.participants = 2
+        assertEquals(HttpStatusCode.Conflict, call().status)
+        // both clients vanished without hanging up: the stale call is reaped
+        rooms.participants = 0
+        assertEquals(HttpStatusCode.OK, call().status)
+        assertTrue(first.callId in rooms.closed)
     }
 
     @Test
