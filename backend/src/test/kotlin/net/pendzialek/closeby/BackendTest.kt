@@ -31,16 +31,19 @@ import kotlinx.coroutines.withTimeout
 import net.pendzialek.closeby.api.AuthResponse
 import net.pendzialek.closeby.api.CallJoin
 import net.pendzialek.closeby.api.DeviceKind
+import net.pendzialek.closeby.api.DeviceUpdate
 import net.pendzialek.closeby.api.Event
 import net.pendzialek.closeby.api.EventTypes
 import net.pendzialek.closeby.api.FrameAdmin
 import net.pendzialek.closeby.api.FrameCommandRequest
 import net.pendzialek.closeby.api.FrameCommands
 import net.pendzialek.closeby.api.FrameConfig
+import net.pendzialek.closeby.api.FrameContactEntry
 import net.pendzialek.closeby.api.FrameSettings
 import net.pendzialek.closeby.api.FrameUpdate
 import net.pendzialek.closeby.api.ImmichAlbum
 import net.pendzialek.closeby.api.InviteResponse
+import net.pendzialek.closeby.api.Me
 import net.pendzialek.closeby.api.NewDevice
 import net.pendzialek.closeby.api.NewPerson
 import net.pendzialek.closeby.api.PairingClaimRequest
@@ -48,6 +51,7 @@ import net.pendzialek.closeby.api.PairingStartRequest
 import net.pendzialek.closeby.api.PairingStartResponse
 import net.pendzialek.closeby.api.PairingState
 import net.pendzialek.closeby.api.PairingStatus
+import net.pendzialek.closeby.api.PersonAdmin
 import net.pendzialek.closeby.api.PushTokenRequest
 import net.pendzialek.closeby.api.RegisterRequest
 import net.pendzialek.closeby.api.Slideshow
@@ -359,6 +363,71 @@ class BackendTest {
             assertEquals(true, event.online)
             listener.cancel()
         }
+    }
+
+    @Test
+    fun `a device moved to another person merges a person left behind`() = test { client ->
+        val phone = client.admin()
+        val frame = client.pairFrame(phone)
+        // the PC was registered with the admin code instead of being paired to the phone
+        val pc: AuthResponse = client.register("Tobias am PC", adminCode = "admin-secret", kind = DeviceKind.DESKTOP).body()
+        client.put("/api/admin/frames/${frame.deviceId}/contacts") {
+            bearerAuth(phone.token)
+            contentType(ContentType.Application.Json)
+            setBody(listOf(FrameContactEntry(pc.personId!!, autoAnswer = true)))
+        }
+
+        val frameMove = client.put("/api/admin/devices/${frame.deviceId}") {
+            bearerAuth(phone.token)
+            contentType(ContentType.Application.Json)
+            setBody(DeviceUpdate(phone.personId!!))
+        }
+        assertEquals(HttpStatusCode.BadRequest, frameMove.status)
+
+        val move = client.put("/api/admin/devices/${pc.deviceId}") {
+            bearerAuth(phone.token)
+            contentType(ContentType.Application.Json)
+            setBody(DeviceUpdate(phone.personId!!))
+        }
+        assertEquals(HttpStatusCode.NoContent, move.status)
+
+        val persons: List<PersonAdmin> = client.get("/api/admin/persons") { bearerAuth(phone.token) }.body()
+        assertEquals(listOf(phone.personId), persons.map { it.person.id })
+        assertEquals(setOf(phone.deviceId, pc.deviceId), persons.single().devices.map { it.id }.toSet())
+        // the PC's place on the frame now belongs to the merged person, auto answer included
+        val config: FrameConfig = client.get("/api/frame/config") { bearerAuth(frame.token) }.body()
+        assertEquals(listOf(phone.personId to true), config.contacts.map { it.personId to it.autoAnswer })
+        // the PC keeps working under the new person
+        val me: Me = client.get("/api/me") { bearerAuth(pc.token) }.body()
+        assertEquals(phone.personId, me.person?.id)
+
+        // an admin cannot hand their own device to a contact while their other devices stay admin
+        val invite: InviteResponse = client.post("/api/admin/invites") { bearerAuth(phone.token) }.body()
+        val relative: AuthResponse = client.register("Oma", code = invite.code).body()
+        val lockout = client.put("/api/admin/devices/${pc.deviceId}") {
+            bearerAuth(pc.token)
+            contentType(ContentType.Application.Json)
+            setBody(DeviceUpdate(relative.personId!!))
+        }
+        assertEquals(HttpStatusCode.BadRequest, lockout.status)
+    }
+
+    @Test
+    fun `admins set the picture a frame shows for a person`() = test { client ->
+        val admin = client.admin()
+        val invite: InviteResponse = client.post("/api/admin/invites") { bearerAuth(admin.token) }.body()
+        val relative: AuthResponse = client.register("Oma", code = invite.code).body()
+        val upload = client.put("/api/admin/persons/${relative.personId}/avatar") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Image.PNG)
+            setBody(byteArrayOf(1, 2, 3))
+        }
+        assertEquals(HttpStatusCode.NoContent, upload.status)
+        val avatar = client.get("/api/persons/${relative.personId}/avatar") { bearerAuth(admin.token) }
+        assertEquals(HttpStatusCode.OK, avatar.status)
+        assertEquals(listOf<Byte>(1, 2, 3), avatar.body<ByteArray>().toList())
+        val persons: List<PersonAdmin> = client.get("/api/admin/persons") { bearerAuth(admin.token) }.body()
+        assertTrue(persons.first { it.person.id == relative.personId }.person.avatarVersion != null)
     }
 
     @Test

@@ -1,11 +1,15 @@
 package net.pendzialek.closeby.frame
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.BatteryManager
+import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,6 +70,7 @@ class FrameController(private val app: CloseByApp) : CallController {
     var onCommand: (String) -> Unit = {}
 
     fun start() {
+        ContextCompat.registerReceiver(app, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         app.realtime.start()
         callSession.onPeerLeft = { if (_state.value.call is CallUi.Active) hangUp() }
         scope.launch { app.realtime.events.collect(::onEvent) }
@@ -112,6 +117,39 @@ class FrameController(private val app: CloseByApp) : CallController {
         tick()
     }
 
+    /**
+     * A frame on the wall must not go dark because somebody brushed the power
+     * button: while charging and outside the night hours the screen comes back
+     * on right away. On battery it stays off, so the tablet is not drained.
+     */
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val settings = _state.value.config?.settings
+            if (!isCharging() || (settings != null && isNight(settings.nightStart, settings.nightEnd))) return
+            scope.launch {
+                // the power manager ignores a wake-up that lands while it is still going to sleep
+                delay(1_000)
+                wakeScreen()
+            }
+        }
+    }
+
+    private fun wakeScreen() {
+        val power = app.getSystemService(PowerManager::class.java)
+        @Suppress("DEPRECATION")
+        val lock = power.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+            "closeby:screen",
+        )
+        // the activity's keep-screen-on flag takes over once the screen is on
+        lock.acquire(5_000)
+        touched()
+    }
+
+    private fun battery(): Intent? = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
+    private fun isCharging(): Boolean = (battery()?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+
     // ---- loading ----
 
     private suspend fun refresh() {
@@ -139,13 +177,12 @@ class FrameController(private val app: CloseByApp) : CallController {
     }
 
     private suspend fun reportStatus() {
-        val battery = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val battery = battery()
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-        val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
         val status = DeviceStatus(
             battery = if (level >= 0) level * 100 / scale else null,
-            charging = plugged,
+            charging = isCharging(),
             deviceOwner = DeviceOwner.isActive(app),
             kiosk = app.kioskActive,
         )
@@ -316,6 +353,7 @@ class FrameController(private val app: CloseByApp) : CallController {
     }
 
     fun stop() {
+        runCatching { app.unregisterReceiver(screenOff) }
         stopRinging()
         callSession.leave()
         scope.cancel()

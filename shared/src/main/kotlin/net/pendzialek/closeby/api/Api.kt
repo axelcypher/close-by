@@ -187,6 +187,10 @@ data class PersonUpdate(val displayName: String? = null, val isAdmin: Boolean)
 @Serializable
 data class PersonAdmin(val person: PersonInfo, val devices: List<DeviceInfo>)
 
+/** Admin: hand a phone or PC to another person, e.g. when someone registered twice. */
+@Serializable
+data class DeviceUpdate(val personId: String)
+
 @Serializable
 data class ImmichAlbum(val id: String, val name: String, val assetCount: Int)
 

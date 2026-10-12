@@ -18,9 +18,13 @@ Deployment: `axelcypher/gitops-homelab`, `apps/docker/closeby`. Public hostname
 
 - **Person**: someone the frame can call. Name and avatar are set on the
   person's own device during setup; an admin can override the name shown on
-  the frame (`displayName`). Admins are persons with `isAdmin`.
+  the frame (`displayName`) and replace the picture
+  (`PUT /api/admin/persons/{id}/avatar`). Admins are persons with `isAdmin`.
 - **Device**: anything holding a token. `kind` is `frame`, `phone` or
-  `desktop`. Phones and desktops belong to a person; frames don't.
+  `desktop`. Phones and desktops belong to a person; frames don't. An admin
+  can hand a device to another person (`PUT /api/admin/devices/{id}`); a
+  person left without devices is merged into the target (frame contacts,
+  admin rights, picture) and deleted.
 - **Frame**: settings of a frame device (Immich album, slideshow timing, night
   mode, ...) and its ordered contact list (persons, each with `autoAnswer`).
 - **Call**: one LiveKit room. A frame calls a person, or a person's device calls
@@ -85,7 +89,8 @@ microphone and notifications are granted without prompts, the keyguard and
 status bar are off, the screen stays on while plugged in, and updates install
 silently (checked every 6 hours and on `frame.command update`). A foreground
 service keeps the websocket alive; an incoming call while the UI is hidden
-shows a full-screen notification. Without device owner the frame still works,
+shows a full-screen notification. If the power button turns the screen off
+while the frame is charging (and it is not night), the app wakes it again. Without device owner the frame still works,
 but asks for permissions and update confirmations.
 
 ## Photos

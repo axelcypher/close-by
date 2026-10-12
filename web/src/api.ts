@@ -134,6 +134,9 @@ export const api = {
       request<void>("PUT", `/api/admin/persons/${id}`, body),
     deletePerson: (id: string) => request<void>("DELETE", `/api/admin/persons/${id}`),
     deleteDevice: (id: string) => request<void>("DELETE", `/api/admin/devices/${id}`),
+    moveDevice: (id: string, personId: string) => request<void>("PUT", `/api/admin/devices/${id}`, { personId }),
+    uploadPersonAvatar: (id: string, image: Blob) =>
+      request<void>("PUT", `/api/admin/persons/${id}/avatar`, image, { "Content-Type": image.type }),
     frameCommand: (id: string, command: "maintenance" | "update" | "release") =>
       request<void>("POST", `/api/admin/frames/${id}/command`, { command }),
     invite: () => request<InviteResponse>("POST", "/api/admin/invites"),

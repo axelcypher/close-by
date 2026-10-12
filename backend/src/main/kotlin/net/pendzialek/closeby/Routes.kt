@@ -42,6 +42,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import net.pendzialek.closeby.api.AuthResponse
 import net.pendzialek.closeby.api.DeviceInfo
 import net.pendzialek.closeby.api.DeviceKind
+import net.pendzialek.closeby.api.DeviceUpdate
 import net.pendzialek.closeby.api.Event
 import net.pendzialek.closeby.api.EventTypes
 import net.pendzialek.closeby.api.FrameAdmin
@@ -262,11 +263,7 @@ private fun Route.deviceRoutes(services: Services) {
 
     put("/api/me/avatar") {
         val personId = call.device().personId ?: forbidden()
-        val type = call.request.contentType().withoutParameters()
-        if (type !in AVATAR_TYPES) badRequest("avatar must be jpeg, png or webp")
-        val bytes = call.receive<ByteArray>()
-        if (bytes.isEmpty() || bytes.size > MAX_AVATAR_BYTES) badRequest("avatar must be 1 byte to 2 MB")
-        store.setAvatar(personId, Avatar(bytes, type.toString()))
+        store.setAvatar(personId, call.receiveAvatar())
         services.notifyFramesOf(personId)
         call.respond(HttpStatusCode.NoContent)
     }
@@ -444,11 +441,37 @@ private fun Route.adminRoutes(services: Services) {
         call.respond(HttpStatusCode.NoContent)
     }
 
+    /** The frame shows this picture; the person may still replace it on their own device. */
+    put("/persons/{id}/avatar") {
+        call.requireAdmin(services)
+        val person = store.person(call.parameters["id"]!!) ?: notFound()
+        store.setAvatar(person.id, call.receiveAvatar())
+        services.notifyFramesOf(person.id)
+        call.respond(HttpStatusCode.NoContent)
+    }
+
     delete("/devices/{id}") {
         call.requireAdmin(services)
         val device = store.device(call.parameters["id"]!!) ?: notFound()
         store.deleteDevice(device.id)
         services.hub.disconnect(device.id)
+        call.respond(HttpStatusCode.NoContent)
+    }
+
+    put("/devices/{id}") {
+        call.requireAdmin(services)
+        val device = store.device(call.parameters["id"]!!) ?: notFound()
+        val from = device.personId ?: badRequest("frames belong to nobody")
+        val to = store.person(call.receive<DeviceUpdate>().personId) ?: notFound()
+        // admin rights only carry over when the old person disappears
+        val keepsAdmin = to.isAdmin || store.devicesOfPerson(from).size == 1
+        if (device.id == call.device().id && !keepsAdmin) badRequest("you would lose admin")
+        if (to.id != from) {
+            val merged = store.moveDevice(device.id, from, to.id)
+            // the device's own profile changed; frames only if a person disappeared
+            services.hub.send(device.id, Event(EventTypes.CONFIG_CHANGED))
+            if (merged) services.notifyFramesOf(to.id)
+        }
         call.respond(HttpStatusCode.NoContent)
     }
 
@@ -481,6 +504,14 @@ private suspend fun ApplicationCall.frame(services: Services): PhotoFrame {
 private suspend fun ApplicationCall.requireAdmin(services: Services): Person {
     val personId = device().personId ?: forbidden()
     return services.store.person(personId)?.takeIf { it.isAdmin } ?: forbidden()
+}
+
+private suspend fun ApplicationCall.receiveAvatar(): Avatar {
+    val type = request.contentType().withoutParameters()
+    if (type !in AVATAR_TYPES) badRequest("avatar must be jpeg, png or webp")
+    val bytes = receive<ByteArray>()
+    if (bytes.isEmpty() || bytes.size > MAX_AVATAR_BYTES) badRequest("avatar must be 1 byte to 2 MB")
+    return Avatar(bytes, type.toString())
 }
 
 private fun String.cleanName(): String {

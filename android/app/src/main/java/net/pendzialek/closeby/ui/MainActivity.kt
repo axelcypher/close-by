@@ -86,7 +86,22 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // coming back from the Android settings after maintenance
-        if (app.mode.value == AppMode.FRAME) updateKiosk()
+        if (app.mode.value == AppMode.FRAME) {
+            updateKiosk()
+            hideSystemBars()
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // dialogs, the settings app and the screen turning on bring the bars back
+        if (hasFocus && app.mode.value == AppMode.FRAME) hideSystemBars()
+    }
+
+    private fun hideSystemBars() {
+        val insets = WindowCompat.getInsetsController(window, window.decorView)
+        insets.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insets.hide(WindowInsetsCompat.Type.systemBars())
     }
 
     override fun onStart() {
@@ -104,11 +119,9 @@ class MainActivity : ComponentActivity() {
 
     /** A frame stays on, fullscreen, and may use camera and microphone without asking mid-call. */
     private fun applyWindowMode(mode: AppMode?) {
-        val insets = WindowCompat.getInsetsController(window, window.decorView)
         if (mode == AppMode.FRAME) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            insets.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insets.hide(WindowInsetsCompat.Type.systemBars())
+            hideSystemBars()
             app.ensureFrameRunning()
             DeviceOwner.applyFramePolicies(this)
             // a restart during maintenance must not lock the status bar again
@@ -116,7 +129,7 @@ class MainActivity : ComponentActivity() {
             requestMissingPermissions()
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            insets.show(WindowInsetsCompat.Type.systemBars())
+            WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
             // a phone needs camera and microphone for calls and notifications to ring
             if (mode == AppMode.CONTACT) requestPermissions(includeCamera = true)
         }

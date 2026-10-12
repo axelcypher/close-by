@@ -81,6 +81,10 @@ function handleEvent(event: ServerEvent) {
   const state = call.state;
   switch (event.type) {
     case "config.changed":
+      // an admin may have moved this device to another person
+      loadMe().catch(() => {});
+      session.revision++;
+      break;
     case "presence.changed":
       session.revision++;
       break;

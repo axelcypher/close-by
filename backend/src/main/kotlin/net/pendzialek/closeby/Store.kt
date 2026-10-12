@@ -95,6 +95,39 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     suspend fun deleteDevice(id: String) = db.tx { exec("DELETE FROM devices WHERE id = ?", id) }
 
+    /**
+     * Moves a phone or PC from one person to another. A person left without
+     * devices is merged into the target: their places on frames, admin rights,
+     * and (if the target has none) display name and avatar carry over, then
+     * they are deleted. Returns true if that merge happened.
+     */
+    suspend fun moveDevice(deviceId: String, from: String, to: String): Boolean = db.tx {
+        exec("UPDATE devices SET person_id = ? WHERE id = ?", to, deviceId)
+        val left = one("SELECT COUNT(*) FROM devices WHERE person_id = ?", from) { it.getInt(1) } ?: 0
+        if (left > 0) return@tx false
+        exec(
+            """
+            UPDATE frame_contacts SET person_id = ? WHERE person_id = ?
+            AND frame_id NOT IN (SELECT frame_id FROM frame_contacts WHERE person_id = ?)
+            """,
+            to, from, to,
+        )
+        exec(
+            """
+            UPDATE persons SET
+                display_name = COALESCE(display_name, (SELECT display_name FROM persons WHERE id = ?)),
+                avatar_type = CASE WHEN avatar IS NULL THEN (SELECT avatar_type FROM persons WHERE id = ?) ELSE avatar_type END,
+                avatar_version = CASE WHEN avatar IS NULL THEN (SELECT avatar_version FROM persons WHERE id = ?) ELSE avatar_version END,
+                avatar = COALESCE(avatar, (SELECT avatar FROM persons WHERE id = ?)),
+                is_admin = MAX(is_admin, (SELECT is_admin FROM persons WHERE id = ?))
+            WHERE id = ?
+            """,
+            from, from, from, from, from, to,
+        )
+        exec("DELETE FROM persons WHERE id = ?", from)
+        true
+    }
+
     suspend fun touch(deviceId: String) = db.tx { exec("UPDATE devices SET last_seen = ? WHERE id = ?", now(), deviceId) }
 
     suspend fun setFcmToken(deviceId: String, token: String?) = db.tx {
