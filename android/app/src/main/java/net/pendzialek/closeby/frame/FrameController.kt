@@ -55,6 +55,8 @@ class FrameController(private val app: CloseByApp) : CallController {
     val state: StateFlow<FrameState> = _state
 
     private var lastTouch = System.currentTimeMillis()
+    /** Slideshow started by hand: shown even during night hours, until the next touch. */
+    private var manualSlideshow = false
     private var ringtone: Ringtone? = null
 
     /** Shows the incoming call when the activity is in the background. */
@@ -98,7 +100,16 @@ class FrameController(private val app: CloseByApp) : CallController {
 
     fun touched() {
         lastTouch = System.currentTimeMillis()
+        manualSlideshow = false
         if (_state.value.view != FrameView.CONTACTS) _state.update { it.copy(view = FrameView.CONTACTS) }
+    }
+
+    /** The "show photos" button: behaves like the idle timeout had just passed. */
+    fun showSlideshow() {
+        if (_state.value.photos.isEmpty()) return
+        lastTouch = 0
+        manualSlideshow = true
+        tick()
     }
 
     // ---- loading ----
@@ -149,6 +160,7 @@ class FrameController(private val app: CloseByApp) : CallController {
         val idle = System.currentTimeMillis() - lastTouch > settings.idleTimeoutSeconds * 1000L
         val view = when {
             !idle -> FrameView.CONTACTS
+            manualSlideshow && state.photos.isNotEmpty() -> FrameView.SLIDESHOW
             isNight(settings.nightStart, settings.nightEnd) -> FrameView.NIGHT
             state.photos.isNotEmpty() -> FrameView.SLIDESHOW
             else -> FrameView.CONTACTS

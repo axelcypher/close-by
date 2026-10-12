@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -86,7 +88,7 @@ fun FrameScreen(viewModel: FrameController) {
             },
     ) {
         when (state.view) {
-            FrameView.CONTACTS -> Contacts(state, viewModel.images, onCall = viewModel::call)
+            FrameView.CONTACTS -> Contacts(state, viewModel.images, onCall = viewModel::call, onShowPhotos = viewModel::showSlideshow)
             FrameView.SLIDESHOW -> Slideshow(
                 photos = state.photos,
                 intervalSeconds = state.config?.settings?.slideshowIntervalSeconds ?: 15,
@@ -129,7 +131,7 @@ private fun MaintenanceBar(modifier: Modifier) {
 }
 
 @Composable
-private fun Contacts(state: FrameState, images: Images, onCall: (FrameContact) -> Unit) {
+private fun Contacts(state: FrameState, images: Images, onCall: (FrameContact) -> Unit, onShowPhotos: () -> Unit) {
     val contacts = state.config?.contacts.orEmpty()
     Column(Modifier.fillMaxSize().padding(24.dp)) {
         if (!state.connected) {
@@ -153,7 +155,7 @@ private fun Contacts(state: FrameState, images: Images, onCall: (FrameContact) -
             }
             return
         }
-        BoxWithConstraints(Modifier.fillMaxSize().padding(top = 8.dp)) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
             val landscape = maxWidth > maxHeight
             // as few rows/columns as possible: big faces are the whole point
             val columns = when {
@@ -174,6 +176,14 @@ private fun Contacts(state: FrameState, images: Images, onCall: (FrameContact) -
                     }
                 }
             }
+        }
+        if (state.photos.isNotEmpty()) {
+            Button(
+                onClick = onShowPhotos,
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 20.dp),
+                contentPadding = PaddingValues(horizontal = 32.dp, vertical = 14.dp),
+            ) { Text("Bilder anschauen", fontSize = 24.sp) }
         }
     }
 }
