@@ -8,8 +8,11 @@ import android.content.pm.PackageInstaller
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import net.pendzialek.closeby.BuildConfig
+import net.pendzialek.closeby.api.AppRelease
 import net.pendzialek.closeby.data.Api
 import okhttp3.Request
 import java.io.File
@@ -17,31 +20,52 @@ import java.security.MessageDigest
 
 /**
  * Installs the APK the backend ships when it is newer than this one. As device
- * owner the install is silent; otherwise Android asks for confirmation.
+ * owner the install is silent, and so is a self-update on Android 12+ once
+ * CloseBy may install apps; otherwise Android asks for confirmation.
  */
 class Updater(private val context: Context, private val api: Api) {
-    /** Returns a short status for logs and the admin. */
-    suspend fun checkAndInstall(): String = withContext(Dispatchers.IO) {
-        val release = runCatching { api.latestRelease() }.getOrNull() ?: return@withContext "no release published"
-        if (release.versionCode <= BuildConfig.VERSION_CODE) return@withContext "up to date (${BuildConfig.VERSION_CODE})"
+    private val busy = Mutex()
 
+    /** No confirmation needed, so an update may run while nobody looks. */
+    fun canInstallSilently(): Boolean =
+        DeviceOwner.isActive(context) || (Build.VERSION.SDK_INT >= 31 && context.packageManager.canRequestPackageInstalls())
+
+    /** Android 12+ could update without asking, but the user has not allowed CloseBy to install apps yet. */
+    fun needsInstallPermission(): Boolean = Build.VERSION.SDK_INT >= 31 && !canInstallSilently()
+
+    /** The published release if it is newer than this app, else null (also when offline). */
+    suspend fun newerRelease(): AppRelease? =
+        runCatching { api.latestRelease() }.getOrNull()?.takeIf { it.versionCode > BuildConfig.VERSION_CODE }
+
+    /** Returns a short status for logs and the admin. */
+    suspend fun checkAndInstall(): String {
+        val release = runCatching { api.latestRelease() }.getOrNull() ?: return "no release published"
+        if (release.versionCode <= BuildConfig.VERSION_CODE) return "up to date (${BuildConfig.VERSION_CODE})"
+        return install(release)
+    }
+
+    /** Downloads and verifies [release], then hands it to the package installer; the app restarts as the new version. */
+    suspend fun install(release: AppRelease): String = busy.withLock { withContext(Dispatchers.IO) { downloadAndInstall(release) } }
+
+    private fun downloadAndInstall(release: AppRelease): String {
         val apk = File(context.cacheDir, "update.apk")
         api.client.newCall(Request.Builder().url(release.url).build()).execute().use { response ->
-            if (!response.isSuccessful) return@withContext "download failed: ${response.code}"
+            if (!response.isSuccessful) return "download failed: ${response.code}"
             apk.outputStream().use { out -> response.body!!.byteStream().copyTo(out) }
         }
         if (sha256(apk) != release.sha256.lowercase()) {
             apk.delete()
-            return@withContext "checksum mismatch, update skipped"
+            return "checksum mismatch, update skipped"
         }
-        install(apk)
-        "installing ${release.versionName}"
+        commit(apk)
+        return "installing ${release.versionName}"
     }
 
-    private fun install(apk: File) {
+    private fun commit(apk: File) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
+            // honoured for self-updates with UPDATE_PACKAGES_WITHOUT_USER_ACTION and the install permission granted
             if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
         }
         val sessionId = installer.createSession(params)

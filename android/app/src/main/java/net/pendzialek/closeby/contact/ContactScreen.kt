@@ -110,6 +110,26 @@ fun ContactScreen(controller: ContactController) {
                     }
                 }
 
+                state.update?.let { release ->
+                    item {
+                        Section {
+                            Text("Neue Version ${release.versionName}", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                when {
+                                    app.updater.canInstallSilently() -> "Kommt sonst von selbst, sobald CloseBy im WLAN nicht geöffnet ist."
+                                    app.updater.needsInstallPermission() ->
+                                        "Android fragt einmal, ob CloseBy Apps installieren darf. Erlaubst du das, kommen Updates danach von selbst."
+                                    else -> "Android fragt vor der Installation kurz nach."
+                                },
+                                color = Muted,
+                            )
+                            Button(onClick = controller::installUpdate, enabled = !state.updating) {
+                                Text(if (state.updating) "Wird geladen …" else "Jetzt aktualisieren")
+                            }
+                        }
+                    }
+                }
+
                 if (state.frames.isEmpty()) {
                     item { Section { Text("Noch kein Rahmen, den du anrufen kannst.", color = Muted) } }
                 }
@@ -126,6 +146,16 @@ fun ContactScreen(controller: ContactController) {
                                 pickPhotos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                             }) { Text("Fotos schicken") }
                         }
+                    }
+                }
+                if (state.frames.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Fotos gehen auch direkt aus der Galerie: Teilen → „An Rahmen senden“.",
+                            color = Muted,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
                     }
                 }
 

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import net.pendzialek.closeby.CloseByApp
+import net.pendzialek.closeby.api.AppRelease
 import net.pendzialek.closeby.api.CallParty
 import net.pendzialek.closeby.api.EndReasons
 import net.pendzialek.closeby.api.Event
@@ -32,6 +33,9 @@ data class ContactState(
     val connected: Boolean = false,
     /** Bumped on presence and config events, so the admin screens reload. */
     val revision: Int = 0,
+    /** A newer app version, offered on the contact screen; [net.pendzialek.closeby.device.UpdateJob] installs it silently where it can. */
+    val update: AppRelease? = null,
+    val updating: Boolean = false,
 )
 
 /**
@@ -72,7 +76,10 @@ class ContactController(private val app: CloseByApp) : CallController {
     fun onUiVisible(visible: Boolean) {
         uiVisible = visible
         updateRealtime()
-        if (visible) scope.launch { refresh() }
+        if (visible) {
+            scope.launch { refresh() }
+            checkForUpdate()
+        }
     }
 
     suspend fun refresh() {
@@ -84,6 +91,32 @@ class ContactController(private val app: CloseByApp) : CallController {
             if (e.status == 401) app.signOut()
         } catch (_: Exception) {
             // offline
+        }
+    }
+
+    // ---- app updates ----
+
+    private var lastUpdateCheck = 0L
+
+    private fun checkForUpdate() {
+        val now = System.currentTimeMillis()
+        if (now - lastUpdateCheck < UPDATE_CHECK_MS) return
+        lastUpdateCheck = now
+        scope.launch {
+            val release = app.updater.newerRelease()
+            _state.update { it.copy(update = release) }
+        }
+    }
+
+    /** "Jetzt aktualisieren": the app is replaced right away, Android may ask first. */
+    fun installUpdate() {
+        val release = _state.value.update ?: return
+        if (_state.value.updating) return
+        _state.update { it.copy(updating = true) }
+        scope.launch {
+            Log.i("CloseBy", "update: ${app.updater.install(release)}")
+            // still here: the download failed or Android waits for a confirmation
+            _state.update { it.copy(updating = false) }
         }
     }
 
@@ -235,5 +268,9 @@ class ContactController(private val app: CloseByApp) : CallController {
     /** Websocket only while someone looks at the app or a call needs its events. */
     private fun updateRealtime() {
         if (uiVisible || _state.value.call != CallUi.None) app.realtime.start() else app.realtime.stop()
+    }
+
+    private companion object {
+        const val UPDATE_CHECK_MS = 30 * 60_000L
     }
 }

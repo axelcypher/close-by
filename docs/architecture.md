@@ -103,5 +103,9 @@ talk to the backend: `GET /api/frame/slideshow`, `GET /api/photos/{assetId}`.
 
 CI builds the signed APK and bakes it into the backend image
 (`/app/apk/closeby.apk` + `version.json`). `GET /api/app/android` returns the
-latest version; frames running as device owner install it silently. The APK
+latest version; frames running as device owner install it silently. On
+Android 12+ a self-update needs no confirmation either once CloseBy may install
+apps (`UPDATE_PACKAGES_WITHOUT_USER_ACTION`): phones check every six hours on
+Wi-Fi while the app is closed (`UpdateJob`), and the contact screen offers a
+newer version with a button, which also leads through that permission. The APK
 is also downloadable without login under `/download`.

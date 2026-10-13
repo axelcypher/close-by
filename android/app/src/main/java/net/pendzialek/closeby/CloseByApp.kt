@@ -20,6 +20,7 @@ import net.pendzialek.closeby.data.Images
 import net.pendzialek.closeby.data.Prefs
 import net.pendzialek.closeby.data.Realtime
 import net.pendzialek.closeby.device.DeviceOwner
+import net.pendzialek.closeby.device.UpdateJob
 import net.pendzialek.closeby.device.Updater
 import net.pendzialek.closeby.frame.FrameController
 import net.pendzialek.closeby.frame.FrameService
@@ -93,6 +94,7 @@ class CloseByApp : Application() {
     fun ensureContactRunning(mode: AppMode? = _mode.value) {
         if (mode != AppMode.CONTACT || contactController != null) return
         contactController = ContactController(this).apply { start() }
+        UpdateJob.schedule(this)
     }
 
     /** Starts the frame logic once; the service and the activity both call this. */
@@ -106,8 +108,8 @@ class CloseByApp : Application() {
         updateJob = scope.launch {
             delay(60_000)
             while (true) {
-                // without device owner every update needs a tap; only on request then
-                if (DeviceOwner.isActive(this@CloseByApp)) Log.i("CloseBy", "update: ${updater.checkAndInstall()}")
+                // an update that needs a tap waits for an admin's request
+                if (updater.canInstallSilently()) Log.i("CloseBy", "update: ${updater.checkAndInstall()}")
                 delay(6 * 60 * 60_000L)
             }
         }
@@ -179,6 +181,7 @@ class CloseByApp : Application() {
         frameController = null
         contactController?.stop()
         contactController = null
+        UpdateJob.cancel(this)
         FrameService.stop(this)
         realtime.stop()
         prefs.signOut()
