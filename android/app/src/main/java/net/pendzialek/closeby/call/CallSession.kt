@@ -59,7 +59,9 @@ class CallSession(private val context: Context, private val api: Api) {
         }
         val newRoom = LiveKit.create(
             appContext = context,
-            options = RoomOptions(adaptiveStream = true, dynacast = true),
+            // calls are one to one: the caller publishes while still alone in the room, and with dynacast its
+            // video stayed paused for the callee; with a single subscriber neither optimization pays off
+            options = RoomOptions(adaptiveStream = false, dynacast = false),
             overrides = LiveKitOverrides(okHttpClient = api.client, audioOptions = AudioOptions(audioHandler = audioHandler)),
         )
         room = newRoom

@@ -210,7 +210,9 @@ export function localVideoTrack() {
 }
 
 async function joinRoom(url: string, token: string) {
-  const current = new Room({ adaptiveStream: true, dynacast: true });
+  // one to one: the caller publishes while still alone in the room, and with dynacast its video
+  // stayed paused for the callee; with a single subscriber neither optimization pays off
+  const current = new Room({ adaptiveStream: false, dynacast: false });
   room = current;
   current.on(RoomEvent.TrackSubscribed, (track) => {
     if (track.kind === Track.Kind.Video) call.remoteVideo = track;
