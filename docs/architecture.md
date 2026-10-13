@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `backend/` | Kotlin, Ktor, SQLite | Devices, persons, frames, pairing, call signaling, Immich proxy, FCM, APK delivery |
 | `shared/` | Kotlin (JVM) | API models shared by backend and Android app |
-| `android/` | Kotlin, Compose | One app, two modes: **frame** (the tablet) and **contact** (a relative's phone) |
+| `android/` | Kotlin, Compose | One app, two modes: **frame** (the tablet) and **contact** (a relative's phone; admins also get the admin pages of the web client) |
 | `web/` | TypeScript | Contact/admin client for the PC, served by the backend |
 | `desktop/` | Tauri | Thin Windows shell around the hosted web client (tray, autostart) |
 | LiveKit | SFU | Media for the calls; the backend only issues room tokens |

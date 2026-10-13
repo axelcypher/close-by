@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { api, type FrameAdmin, type FrameContactEntry, type ImmichAlbum, type PersonAdmin } from "../api";
-  import Avatar from "./Avatar.svelte";
+  import AvatarPicker from "./AvatarPicker.svelte";
 
   let {
     frame,
@@ -130,11 +130,19 @@
 
     <div class="stack">
       <h3>Kontakte auf dem Rahmen</h3>
+      <p class="muted small">Ein Bild gilt für alle Rahmen, die die Person zeigen.</p>
       {#each contacts as contact, index (contact.personId)}
         {@const person = personById.get(contact.personId)}
         {#if person}
           <div class="contact row">
-            <Avatar personId={person.id} version={person.avatarVersion} name={person.displayName ?? person.name} size={36} />
+            <AvatarPicker
+              personId={person.id}
+              version={person.avatarVersion}
+              name={person.displayName ?? person.name}
+              size={36}
+              {onChanged}
+              onError={(message) => (error = message)}
+            />
             <span class="grow">{person.displayName ?? person.name}</span>
             <label class="check small" title="Anrufe dieser Person nimmt der Rahmen selbst an">
               <input type="checkbox" bind:checked={contact.autoAnswer} /> Auto-Annahme
@@ -149,7 +157,14 @@
         <p class="muted small">Nicht auf diesem Rahmen:</p>
         {#each hidden as { person } (person.id)}
           <div class="contact row">
-            <Avatar personId={person.id} version={person.avatarVersion} name={person.name} size={36} />
+            <AvatarPicker
+              personId={person.id}
+              version={person.avatarVersion}
+              name={person.displayName ?? person.name}
+              size={36}
+              {onChanged}
+              onError={(message) => (error = message)}
+            />
             <span class="grow muted">{person.displayName ?? person.name}</span>
             <button class="link" onclick={() => contacts.push({ personId: person.id, autoAnswer: false })}>Anzeigen</button>
           </div>

@@ -1,8 +1,7 @@
 <script lang="ts">
   import { api, type DeviceInfo, type InviteResponse, type PersonAdmin } from "../api";
-  import { squareJpeg } from "../image";
   import { session } from "../session.svelte";
-  import Avatar from "./Avatar.svelte";
+  import AvatarPicker from "./AvatarPicker.svelte";
   import Qr from "./Qr.svelte";
 
   let persons = $state<PersonAdmin[]>([]);
@@ -42,14 +41,6 @@
     return run(() => api.admin.updatePerson(entry.person.id, { displayName: entry.person.displayName, isAdmin }));
   }
 
-  async function pickAvatar(entry: PersonAdmin, event: Event) {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    if (!file) return;
-    await run(async () => api.admin.uploadPersonAvatar(entry.person.id, await squareJpeg(file, 512)));
-  }
-
   /** Hands the device to another person; a person left without devices is merged into the target. */
   function moveDevice(device: DeviceInfo, event: Event) {
     const select = event.currentTarget as HTMLSelectElement;
@@ -83,11 +74,14 @@
   {#each persons as entry (entry.person.id)}
     <article class="card stack">
       <div class="row">
-        <label class="picture" title="Bild für den Rahmen ändern">
-          <Avatar personId={entry.person.id} version={entry.person.avatarVersion} name={entry.person.name} size={48} />
-          <input type="file" accept="image/*" onchange={(e) => pickAvatar(entry, e)} />
-          <span class="change">Bild ändern</span>
-        </label>
+        <AvatarPicker
+          personId={entry.person.id}
+          version={entry.person.avatarVersion}
+          name={entry.person.name}
+          size={48}
+          onChanged={() => session.revision++}
+          onError={(message) => (error = message)}
+        />
         <div class="grow">
           <h2>{entry.person.name}{entry.person.id === session.me?.person?.id ? " (du)" : ""}</h2>
           <span class="muted">{entry.person.isAdmin ? "Admin" : "Kontakt"}</span>
@@ -164,19 +158,5 @@
   }
   .move {
     max-width: 11rem;
-  }
-  .picture {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.2rem;
-    cursor: pointer;
-    font-size: 0.8rem;
-  }
-  .picture input {
-    display: none;
-  }
-  .picture .change {
-    color: var(--accent);
   }
 </style>

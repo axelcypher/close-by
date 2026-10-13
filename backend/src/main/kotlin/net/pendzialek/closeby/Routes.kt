@@ -7,7 +7,6 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
-import io.ktor.server.http.content.default
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.request.contentType
 import io.ktor.server.request.receive
@@ -100,7 +99,19 @@ fun Application.routes(services: Services) = routing {
         route("/api/admin") { adminRoutes(services) }
     }
     val web = File(services.config.webDir)
-    if (web.isDirectory) staticFiles("/", web) { default("index.html") }
+    if (web.isDirectory) {
+        staticFiles("/", web) {
+            // Vite fingerprints assets/; the page is revalidated, so a release shows on the next load
+            cacheControl { file ->
+                if (file.parentFile?.name == "assets") listOf(CacheControl.MaxAge(maxAgeSeconds = 365 * 86_400)) else listOf(CacheControl.NoCache(null))
+            }
+            // unknown paths get the page, like default("index.html"), but uncached as well
+            fallback { _, call ->
+                call.response.cacheControl(CacheControl.NoCache(null))
+                call.respondFile(web.resolve("index.html"))
+            }
+        }
+    }
 }
 
 // ---- public: registration, pairing, app download ----

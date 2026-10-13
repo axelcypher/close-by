@@ -8,8 +8,16 @@ import kotlinx.serialization.json.Json
 import net.pendzialek.closeby.api.ApiError
 import net.pendzialek.closeby.api.AppRelease
 import net.pendzialek.closeby.api.AuthResponse
+import net.pendzialek.closeby.api.DeviceUpdate
+import net.pendzialek.closeby.api.FrameAdmin
+import net.pendzialek.closeby.api.FrameCommandRequest
+import net.pendzialek.closeby.api.FrameContactEntry
 import net.pendzialek.closeby.api.FrameRef
+import net.pendzialek.closeby.api.FrameUpdate
+import net.pendzialek.closeby.api.ImmichAlbum
 import net.pendzialek.closeby.api.InviteResponse
+import net.pendzialek.closeby.api.PersonAdmin
+import net.pendzialek.closeby.api.PersonUpdate
 import net.pendzialek.closeby.api.PairingClaimRequest
 import net.pendzialek.closeby.api.PairingClaimResponse
 import net.pendzialek.closeby.api.PushTokenRequest
@@ -126,8 +134,6 @@ class Api(private val prefs: Prefs, cacheDir: File) {
 
     suspend fun signOutDevice() = call<Unit>(request("/api/me").delete().build(), null)
 
-    suspend fun invite(): InviteResponse = post("/api/admin/invites", InviteResponse.serializer())
-
     suspend fun sharePhoto(frameId: String, jpeg: ByteArray) = call<Unit>(
         request("/api/frames/$frameId/photos").post(jpeg.toRequestBody(JPEG)).build(),
         null,
@@ -135,6 +141,42 @@ class Api(private val prefs: Prefs, cacheDir: File) {
 
     suspend fun callFrame(frameId: String): CallJoin =
         post("/api/calls", StartCallRequest(frameId = frameId), StartCallRequest.serializer(), CallJoin.serializer())
+
+    // ---- admin ----
+
+    suspend fun invite(): InviteResponse = post("/api/admin/invites", InviteResponse.serializer())
+
+    suspend fun adminFrames(): List<FrameAdmin> = get("/api/admin/frames", ListSerializer(FrameAdmin.serializer()))
+
+    suspend fun updateFrame(id: String, update: FrameUpdate) = put("/api/admin/frames/$id", update, FrameUpdate.serializer())
+
+    suspend fun setFrameContacts(id: String, contacts: List<FrameContactEntry>) =
+        put("/api/admin/frames/$id/contacts", contacts, ListSerializer(FrameContactEntry.serializer()))
+
+    suspend fun frameCommand(id: String, command: String) = post<FrameCommandRequest, Unit>(
+        "/api/admin/frames/$id/command",
+        FrameCommandRequest(command),
+        FrameCommandRequest.serializer(),
+        null,
+    )
+
+    suspend fun albums(): List<ImmichAlbum> = get("/api/admin/immich/albums", ListSerializer(ImmichAlbum.serializer()))
+
+    suspend fun adminPersons(): List<PersonAdmin> = get("/api/admin/persons", ListSerializer(PersonAdmin.serializer()))
+
+    suspend fun updatePerson(id: String, update: PersonUpdate) = put("/api/admin/persons/$id", update, PersonUpdate.serializer())
+
+    suspend fun deletePerson(id: String) = call<Unit>(request("/api/admin/persons/$id").delete().build(), null)
+
+    /** The picture frames show for the person; replaces whatever the person set. */
+    suspend fun uploadPersonAvatar(id: String, jpeg: ByteArray) = call<Unit>(
+        request("/api/admin/persons/$id/avatar").put(jpeg.toRequestBody(JPEG)).build(),
+        null,
+    )
+
+    suspend fun deleteDevice(id: String) = call<Unit>(request("/api/admin/devices/$id").delete().build(), null)
+
+    suspend fun moveDevice(id: String, personId: String) = put("/api/admin/devices/$id", DeviceUpdate(personId), DeviceUpdate.serializer())
 
     // ---- calls ----
 
@@ -160,6 +202,9 @@ class Api(private val prefs: Prefs, cacheDir: File) {
 
     private suspend fun <B, T> post(path: String, body: B, bodySerializer: KSerializer<B>, serializer: KSerializer<T>?): T =
         call(request(path).post(json.encodeToString(bodySerializer, body).toRequestBody(JSON)).build(), serializer)
+
+    private suspend fun <B> put(path: String, body: B, bodySerializer: KSerializer<B>) =
+        call<Unit>(request(path).put(json.encodeToString(bodySerializer, body).toRequestBody(JSON)).build(), null)
 
     @Suppress("UNCHECKED_CAST")
     private suspend fun <T> call(request: Request, serializer: KSerializer<T>?): T = withContext(Dispatchers.IO) {

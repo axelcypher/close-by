@@ -30,6 +30,8 @@ data class ContactState(
     val frames: List<FrameRef> = emptyList(),
     val call: CallUi = CallUi.None,
     val connected: Boolean = false,
+    /** Bumped on presence and config events, so the admin screens reload. */
+    val revision: Int = 0,
 )
 
 /**
@@ -179,7 +181,10 @@ class ContactController(private val app: CloseByApp) : CallController {
     private fun onEvent(event: Event) {
         val call = _state.value.call
         when (event.type) {
-            EventTypes.PRESENCE_CHANGED, EventTypes.CONFIG_CHANGED -> scope.launch { refresh() }
+            EventTypes.PRESENCE_CHANGED, EventTypes.CONFIG_CHANGED -> {
+                _state.update { it.copy(revision = it.revision + 1) }
+                scope.launch { refresh() }
+            }
             EventTypes.CALL_INCOMING -> {
                 val from = event.from ?: return
                 val callId = event.callId ?: return

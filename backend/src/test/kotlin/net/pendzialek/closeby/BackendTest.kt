@@ -15,6 +15,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
@@ -57,6 +58,7 @@ import net.pendzialek.closeby.api.RegisterRequest
 import net.pendzialek.closeby.api.Slideshow
 import net.pendzialek.closeby.api.SlideshowPhoto
 import net.pendzialek.closeby.api.StartCallRequest
+import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -99,8 +101,9 @@ class BackendTest {
     private val push = FakePush()
     private val photos = FakePhotos()
 
-    private fun test(block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
+    private fun test(web: (File) -> Unit = {}, block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
         val dir = Files.createTempDirectory("closeby-test").toFile()
+        web(dir.resolve("web"))
         val config = Config(
             databasePath = dir.resolve("test.db").path,
             adminCode = "admin-secret",
@@ -478,6 +481,20 @@ class BackendTest {
         assertEquals(HttpStatusCode.NoContent, client.delete("/api/admin/devices/${frame.deviceId}") { bearerAuth(admin.token) }.status)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/api/frame/config") { bearerAuth(frame.token) }.status)
         assertNull(push.sent.firstOrNull())
+    }
+
+    @Test
+    fun `web client revalidates its page but keeps fingerprinted assets`() = test(web = { dir ->
+        dir.resolve("assets").mkdirs()
+        dir.resolve("index.html").writeText("<!doctype html>")
+        dir.resolve("assets/index-abc123.js").writeText("console.log(1)")
+    }) { client ->
+        assertEquals("no-cache", client.get("/").headers[HttpHeaders.CacheControl])
+        // unknown paths fall back to the page
+        val fallback = client.get("/some/where")
+        assertEquals(HttpStatusCode.OK, fallback.status)
+        assertEquals("no-cache", fallback.headers[HttpHeaders.CacheControl])
+        assertEquals("max-age=31536000", client.get("/assets/index-abc123.js").headers[HttpHeaders.CacheControl])
     }
 
     private fun CoroutineScope.launchListener(
