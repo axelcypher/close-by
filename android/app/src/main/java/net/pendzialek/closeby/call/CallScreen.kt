@@ -21,7 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -105,13 +104,15 @@ private fun Prompt(
 
 @Composable
 private fun ActiveCall(call: CallUi.Active, viewModel: CallController) {
-    val remote by viewModel.callSession.remoteVideo.collectAsState()
-    val local by viewModel.callSession.localVideo.collectAsState()
-    val room = viewModel.callSession.currentRoom
+    // read all three right away: a state the && below skips would never trigger the next recomposition,
+    // and the callee sees this screen before its room exists
+    val room = viewModel.callSession.currentRoom.collectAsState().value
+    val remote = viewModel.callSession.remoteVideo.collectAsState().value
+    val local = viewModel.callSession.localVideo.collectAsState().value
 
     Box(Modifier.fillMaxSize()) {
         if (room != null && remote != null) {
-            VideoView(room, remote!!, Modifier.fillMaxSize(), mirror = false)
+            VideoView(room, remote, Modifier.fillMaxSize(), mirror = false)
         } else {
             Text(
                 "${call.name} — Bild kommt gleich …",
@@ -123,7 +124,7 @@ private fun ActiveCall(call: CallUi.Active, viewModel: CallController) {
         if (room != null && local != null) {
             VideoView(
                 room,
-                local!!,
+                local,
                 Modifier.align(Alignment.TopEnd).padding(24.dp).size(width = 200.dp, height = 150.dp).clip(RoundedCornerShape(16.dp)),
                 mirror = true,
             )

@@ -31,7 +31,12 @@ import net.pendzialek.closeby.data.Api
  */
 class CallSession(private val context: Context, private val api: Api) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var room: Room? = null
+    private val _room = MutableStateFlow<Room?>(null)
+    private var room: Room?
+        get() = _room.value
+        set(value) {
+            _room.value = value
+        }
     private var eventsJob: Job? = null
     private var peerLeftJob: Job? = null
 
@@ -44,7 +49,8 @@ class CallSession(private val context: Context, private val api: Api) {
     /** Called when the remote participant disappears (crash, lost network). */
     var onPeerLeft: () -> Unit = {}
 
-    val currentRoom: Room? get() = room
+    /** Observable: whoever accepts a call shows the call screen before the room exists. */
+    val currentRoom: StateFlow<Room?> = _room
 
     suspend fun join(join: CallJoin, volumePercent: Int?) {
         leave()
@@ -59,9 +65,7 @@ class CallSession(private val context: Context, private val api: Api) {
         }
         val newRoom = LiveKit.create(
             appContext = context,
-            // calls are one to one: the caller publishes while still alone in the room, and with dynacast its
-            // video stayed paused for the callee; with a single subscriber neither optimization pays off
-            options = RoomOptions(adaptiveStream = false, dynacast = false),
+            options = RoomOptions(adaptiveStream = true, dynacast = true),
             overrides = LiveKitOverrides(okHttpClient = api.client, audioOptions = AudioOptions(audioHandler = audioHandler)),
         )
         room = newRoom
