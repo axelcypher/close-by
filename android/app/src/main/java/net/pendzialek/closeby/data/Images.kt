@@ -15,8 +15,10 @@ class Images(private val api: Api, private val maxSize: Int) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
 
-    suspend fun avatar(personId: String, version: Long): Bitmap? =
-        load("/api/persons/$personId/avatar?v=$version", targetSize = 768)
+    suspend fun avatar(personId: String, version: Long): Bitmap? = picture(personPicture(personId, version)!!)
+
+    /** A person's or a frame's picture, by the path from [personPicture] or [framePicture]. */
+    suspend fun picture(path: String): Bitmap? = load(path, targetSize = 768)
 
     suspend fun photo(assetId: String): Bitmap? = load("/api/photos/$assetId", targetSize = maxSize)
 
@@ -26,6 +28,14 @@ class Images(private val api: Api, private val maxSize: Int) {
         val bitmap = withContext(Dispatchers.Default) { decode(bytes, targetSize) } ?: return null
         cache.put(path, bitmap)
         return bitmap
+    }
+
+    companion object {
+        /** Null without a picture; the version makes a changed picture a new URL. */
+        fun personPicture(personId: String, version: Long?): String? = version?.let { "/api/persons/$personId/avatar?v=$it" }
+
+        /** The frame's own picture, the one its persons see. */
+        fun framePicture(frameId: String, version: Long?): String? = version?.let { "/api/frames/$frameId/avatar?v=$it" }
     }
 
     /** Decodes at the smallest power-of-two scale that still covers [targetSize]. */

@@ -326,7 +326,16 @@ private fun Route.deviceRoutes(services: Services) {
 
     get("/api/frames") {
         val personId = call.device().personId ?: forbidden()
-        call.respond(store.framesOfPerson(personId).map { FrameRef(it.deviceId, it.name, services.hub.isOnline(it.deviceId)) })
+        call.respond(
+            store.framesOfPerson(personId).map { FrameRef(it.deviceId, it.name, services.hub.isOnline(it.deviceId), it.avatarVersion) },
+        )
+    }
+
+    get("/api/frames/{id}/avatar") {
+        val avatar = store.frameAvatar(call.parameters["id"]!!) ?: notFound()
+        // clients add ?v=<avatarVersion>, so a changed picture is a new URL
+        call.response.cacheControl(CacheControl.MaxAge(maxAgeSeconds = 86_400))
+        call.respondBytes(avatar.bytes, ContentType.parse(avatar.contentType))
     }
 }
 
@@ -385,6 +394,7 @@ private fun Route.adminRoutes(services: Services) {
                     albumId = frame.albumId,
                     settings = frame.settings,
                     contacts = store.frameContacts(frame.deviceId).map { FrameContactEntry(it.person.id, it.autoAnswer) },
+                    avatarVersion = frame.avatarVersion,
                 )
             },
         )
@@ -408,6 +418,18 @@ private fun Route.adminRoutes(services: Services) {
         if (contacts.map { it.personId }.toSet().size != contacts.size) badRequest("duplicate person")
         store.setFrameContacts(frame.deviceId, contacts)
         services.notifyFrame(frame.deviceId)
+        call.respond(HttpStatusCode.NoContent)
+    }
+
+    /** The frame's own picture: what its persons see when it calls and in their list of frames. */
+    put("/frames/{id}/avatar") {
+        call.requireAdmin(services)
+        val frame = store.frame(call.parameters["id"]!!) ?: notFound()
+        store.setFrameAvatar(frame.deviceId, call.receiveAvatar())
+        // the phones and PCs that list this frame reload it
+        store.frameContacts(frame.deviceId)
+            .flatMap { store.devicesOfPerson(it.person.id) }
+            .forEach { services.hub.send(it.id, Event(EventTypes.CONFIG_CHANGED)) }
         call.respond(HttpStatusCode.NoContent)
     }
 

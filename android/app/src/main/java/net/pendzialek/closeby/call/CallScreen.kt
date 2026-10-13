@@ -39,7 +39,7 @@ import io.livekit.android.renderer.TextureViewRenderer
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.VideoTrack
 import net.pendzialek.closeby.ui.Danger
-import net.pendzialek.closeby.ui.rememberAvatar
+import net.pendzialek.closeby.ui.rememberPicture
 import net.pendzialek.closeby.ui.Ok
 
 private val Dark = Color(0xFF151515)
@@ -52,8 +52,7 @@ fun CallScreen(call: CallUi, viewModel: CallController) {
             is CallUi.Active -> ActiveCall(call, viewModel)
             is CallUi.Incoming -> Prompt(
                 name = call.name,
-                personId = call.personId,
-                avatarVersion = call.avatarVersion,
+                picture = call.picture,
                 viewModel = viewModel,
                 label = if (call.autoAnswer) "verbindet gleich …" else "ruft an",
             ) {
@@ -65,10 +64,10 @@ fun CallScreen(call: CallUi, viewModel: CallController) {
                     BigButton("Nicht jetzt", Danger, viewModel::decline)
                 }
             }
-            is CallUi.Outgoing -> Prompt(call.name, call.personId, call.avatarVersion, viewModel, "wird angerufen …") {
+            is CallUi.Outgoing -> Prompt(call.name, call.picture, viewModel, "wird angerufen …") {
                 BigButton("Auflegen", Danger, viewModel::hangUp)
             }
-            is CallUi.Ended -> Prompt(call.name, null, null, viewModel, call.message) {}
+            is CallUi.Ended -> Prompt(call.name, null, viewModel, call.message) {}
             CallUi.None -> Unit
         }
     }
@@ -77,13 +76,12 @@ fun CallScreen(call: CallUi, viewModel: CallController) {
 @Composable
 private fun Prompt(
     name: String,
-    personId: String?,
-    avatarVersion: Long?,
+    picture: String?,
     viewModel: CallController,
     label: String,
     buttons: @Composable () -> Unit,
 ) {
-    val avatar = rememberAvatar(personId, avatarVersion, viewModel.images)
+    val avatar = rememberPicture(picture, viewModel.images)
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

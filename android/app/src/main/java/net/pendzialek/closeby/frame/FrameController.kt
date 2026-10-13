@@ -32,6 +32,7 @@ import net.pendzialek.closeby.api.FrameContact
 import net.pendzialek.closeby.api.SlideshowPhoto
 import net.pendzialek.closeby.api.StatusReport
 import net.pendzialek.closeby.data.ApiException
+import net.pendzialek.closeby.data.Images
 import net.pendzialek.closeby.device.DeviceOwner
 import java.time.LocalTime
 
@@ -218,7 +219,7 @@ class FrameController(private val app: CloseByApp) : CallController {
     fun call(contact: FrameContact) {
         if (_state.value.call != CallUi.None) return
         touched()
-        _state.update { it.copy(call = CallUi.Outgoing(contact.name, contact.personId, contact.avatarVersion)) }
+        _state.update { it.copy(call = CallUi.Outgoing(contact.name, Images.personPicture(contact.personId, contact.avatarVersion))) }
         scope.launch {
             try {
                 val join = api.startCall(contact.personId)
@@ -287,7 +288,7 @@ class FrameController(private val app: CloseByApp) : CallController {
                 if (!app.uiVisible) onIncomingWhileHidden(from.name)
                 val auto = event.autoAnswer == true
                 val version = _state.value.config?.contacts?.find { it.personId == from.id }?.avatarVersion
-                _state.update { it.copy(call = CallUi.Incoming(event.callId!!, from.name, from.id, version, auto)) }
+                _state.update { it.copy(call = CallUi.Incoming(event.callId!!, from.name, Images.personPicture(from.id, version), auto)) }
                 if (auto) {
                     scope.launch {
                         delay(3_000)

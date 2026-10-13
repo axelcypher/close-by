@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type FrameRef } from "../api";
   import { call, session, startCall } from "../session.svelte";
+  import Avatar from "./Avatar.svelte";
 
   let frames = $state<FrameRef[] | null>(null);
   let error = $state("");
@@ -45,7 +46,13 @@
   <div class="grid">
     {#each frames ?? [] as frame (frame.id)}
       <article class="card frame">
-        <div class="picture" aria-hidden="true"><img src="/icon.svg" alt="" width="72" height="72" /></div>
+        <div class="picture" aria-hidden="true">
+          {#if frame.avatarVersion != null}
+            <Avatar frameId={frame.id} version={frame.avatarVersion} name={frame.name} size={96} />
+          {:else}
+            <img src="/icon.svg" alt="" width="72" height="72" />
+          {/if}
+        </div>
         <div>
           <h2>{frame.name}</h2>
           <p class="muted row"><span class="dot" class:on={frame.online}></span>{frame.online ? "online" : "offline"}</p>

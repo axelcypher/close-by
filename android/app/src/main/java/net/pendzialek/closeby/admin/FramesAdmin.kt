@@ -56,6 +56,7 @@ fun FramesAdmin(
     actions: AdminActions,
     images: Images,
     changeAvatar: (String) -> Unit,
+    changeFramePicture: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as CloseByApp
@@ -87,7 +88,7 @@ fun FramesAdmin(
         frames == null -> Text("Lädt …", color = Muted)
         frames.isEmpty() -> Section { Text("Noch kein Rahmen eingerichtet.", color = Muted) }
         else -> frames.forEach { frame ->
-            key(frame.device.id) { FrameEditor(frame, persons, albums, actions, images, changeAvatar) }
+            key(frame.device.id) { FrameEditor(frame, persons, albums, actions, images, changeAvatar, changeFramePicture) }
         }
     }
 }
@@ -108,6 +109,7 @@ private fun FrameEditor(
     actions: AdminActions,
     images: Images,
     changeAvatar: (String) -> Unit,
+    changeFramePicture: (String) -> Unit,
 ) {
     val app = LocalContext.current.applicationContext as CloseByApp
     val device = frame.device
@@ -161,11 +163,19 @@ private fun FrameEditor(
     }
 
     Section {
-        Text(device.name, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OnlineDot(device.online)
-            Text(status(device), color = Muted, fontSize = 14.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            PicturePicker(Images.framePicture(device.id, frame.avatarVersion), device.name, 64.dp, images) {
+                changeFramePicture(device.id)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(device.name, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OnlineDot(device.online)
+                    Text(status(device), color = Muted, fontSize = 14.sp)
+                }
+            }
         }
+        Text("Kontaktbild des Rahmens: erscheint bei allen, die er anruft, und in ihrer Rahmenliste.", color = Muted, fontSize = 14.sp)
 
         OutlinedTextField(name, { name = it.take(60) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         AlbumPicker(albumId, albums) { albumId = it }

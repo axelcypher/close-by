@@ -40,6 +40,7 @@ import net.pendzialek.closeby.api.FrameCommandRequest
 import net.pendzialek.closeby.api.FrameCommands
 import net.pendzialek.closeby.api.FrameConfig
 import net.pendzialek.closeby.api.FrameContactEntry
+import net.pendzialek.closeby.api.FrameRef
 import net.pendzialek.closeby.api.FrameSettings
 import net.pendzialek.closeby.api.FrameUpdate
 import net.pendzialek.closeby.api.ImmichAlbum
@@ -431,6 +432,48 @@ class BackendTest {
         assertEquals(listOf<Byte>(1, 2, 3), avatar.body<ByteArray>().toList())
         val persons: List<PersonAdmin> = client.get("/api/admin/persons") { bearerAuth(admin.token) }.body()
         assertTrue(persons.first { it.person.id == relative.personId }.person.avatarVersion != null)
+    }
+
+    @Test
+    fun `admins give a frame a picture its persons see in their list and when it calls`() = test { client ->
+        val admin = client.admin()
+        client.put("/api/me/push") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(PushTokenRequest("fcm-phone"))
+        }
+        val frame = client.pairFrame(admin)
+        val invite: InviteResponse = client.post("/api/admin/invites") { bearerAuth(admin.token) }.body()
+        val relative: AuthResponse = client.register("Oma", code = invite.code).body()
+
+        val refused = client.put("/api/admin/frames/${frame.deviceId}/avatar") {
+            bearerAuth(relative.token)
+            contentType(ContentType.Image.JPEG)
+            setBody(byteArrayOf(4, 5, 6))
+        }
+        assertEquals(HttpStatusCode.Forbidden, refused.status)
+        val upload = client.put("/api/admin/frames/${frame.deviceId}/avatar") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Image.JPEG)
+            setBody(byteArrayOf(4, 5, 6))
+        }
+        assertEquals(HttpStatusCode.NoContent, upload.status)
+
+        val listed: List<FrameRef> = client.get("/api/frames") { bearerAuth(relative.token) }.body()
+        val version = listed.single().avatarVersion
+        assertTrue(version != null)
+        val picture = client.get("/api/frames/${frame.deviceId}/avatar?v=$version") { bearerAuth(relative.token) }
+        assertEquals(HttpStatusCode.OK, picture.status)
+        assertEquals(listOf<Byte>(4, 5, 6), picture.body<ByteArray>().toList())
+        val frames: List<FrameAdmin> = client.get("/api/admin/frames") { bearerAuth(admin.token) }.body()
+        assertEquals(version, frames.single().avatarVersion)
+
+        client.post("/api/calls") {
+            bearerAuth(frame.token)
+            contentType(ContentType.Application.Json)
+            setBody(StartCallRequest(personId = admin.personId))
+        }
+        assertEquals(version.toString(), push.sent.single().second["fromAvatarVersion"])
     }
 
     @Test

@@ -102,6 +102,11 @@ class Db(path: String) : AutoCloseable {
                 token TEXT
             )
             """,
+            """
+            ALTER TABLE frames ADD COLUMN avatar BLOB;
+            ALTER TABLE frames ADD COLUMN avatar_type TEXT;
+            ALTER TABLE frames ADD COLUMN avatar_version INTEGER
+            """,
         )
     }
 }

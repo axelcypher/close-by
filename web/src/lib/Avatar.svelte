@@ -1,13 +1,19 @@
 <script lang="ts">
-  import { avatarUrl } from "../api";
+  import { avatarUrl, frameAvatarUrl } from "../api";
 
-  let { personId, version, name, size = 48 }: { personId: string; version?: number | null; name: string; size?: number } =
-    $props();
+  /** A person's picture, or with [frameId] the frame's own one. */
+  let {
+    personId,
+    frameId,
+    version,
+    name,
+    size = 48,
+  }: { personId?: string; frameId?: string; version?: number | null; name: string; size?: number } = $props();
   let src = $state<string | null>(null);
 
   $effect(() => {
     src = null;
-    avatarUrl(personId, version).then((url) => (src = url));
+    (frameId ? frameAvatarUrl(frameId, version) : avatarUrl(personId!, version)).then((url) => (src = url));
   });
 
   const initials = $derived(

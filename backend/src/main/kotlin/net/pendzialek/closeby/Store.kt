@@ -29,7 +29,14 @@ data class Person(
     val shownName get() = displayName ?: name
 }
 
-data class PhotoFrame(val deviceId: String, val name: String, val albumId: String?, val settings: FrameSettings)
+data class PhotoFrame(
+    val deviceId: String,
+    val name: String,
+    val albumId: String?,
+    val settings: FrameSettings,
+    /** The frame's own picture, for the persons it calls. */
+    val avatarVersion: Long? = null,
+)
 
 data class FrameContactRow(val person: Person, val autoAnswer: Boolean)
 
@@ -247,6 +254,19 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         )
     }
 
+    suspend fun frameAvatar(frameId: String): Avatar? = db.tx {
+        one("SELECT avatar, avatar_type FROM frames WHERE device_id = ? AND avatar IS NOT NULL", frameId) {
+            Avatar(it.getBytes("avatar"), it.getString("avatar_type"))
+        }
+    }
+
+    suspend fun setFrameAvatar(frameId: String, avatar: Avatar) = db.tx {
+        exec(
+            "UPDATE frames SET avatar = ?, avatar_type = ?, avatar_version = ? WHERE device_id = ?",
+            avatar.bytes, avatar.contentType, now(), frameId,
+        )
+    }
+
     suspend fun frameContacts(frameId: String): List<FrameContactRow> = db.tx {
         query(
             """
@@ -311,6 +331,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         name = rs.getString("name"),
         albumId = rs.getString("album_id"),
         settings = json.decodeFromString(FrameSettings.serializer(), rs.getString("settings")),
+        avatarVersion = rs.longOrNull("avatar_version"),
     )
 
     private fun toPairing(rs: ResultSet) = Pairing(

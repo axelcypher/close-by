@@ -26,17 +26,31 @@ fun rememberAvatar(contact: FrameContact, images: Images): ImageBitmap? =
     rememberAvatar(contact.personId, contact.avatarVersion, images)
 
 @Composable
-fun rememberAvatar(personId: String?, version: Long?, images: Images): ImageBitmap? {
-    val bitmap by produceState<ImageBitmap?>(null, personId, version) {
-        value = if (personId != null && version != null) images.avatar(personId, version)?.asImageBitmap() else null
+fun rememberAvatar(personId: String?, version: Long?, images: Images): ImageBitmap? =
+    rememberPicture(personId?.let { Images.personPicture(it, version) }, images)
+
+/** [path] from [Images.personPicture] or [Images.framePicture]; null shows nothing. */
+@Composable
+fun rememberPicture(path: String?, images: Images): ImageBitmap? {
+    val bitmap by produceState<ImageBitmap?>(null, path) {
+        value = path?.let { images.picture(it)?.asImageBitmap() }
     }
     return bitmap
 }
 
 /** Round picture of a person, the first letter of the name while there is none. */
 @Composable
-fun PersonAvatar(personId: String, version: Long?, name: String, size: Dp, images: Images, modifier: Modifier = Modifier) {
-    val avatar = rememberAvatar(personId, version, images)
+fun PersonAvatar(personId: String, version: Long?, name: String, size: Dp, images: Images, modifier: Modifier = Modifier) =
+    RoundPicture(Images.personPicture(personId, version), name, size, images, modifier)
+
+/** The frame's own picture, as the persons it calls see it. */
+@Composable
+fun FrameAvatar(frameId: String, version: Long?, name: String, size: Dp, images: Images, modifier: Modifier = Modifier) =
+    RoundPicture(Images.framePicture(frameId, version), name, size, images, modifier)
+
+@Composable
+fun RoundPicture(path: String?, name: String, size: Dp, images: Images, modifier: Modifier = Modifier) {
+    val avatar = rememberPicture(path, images)
     Box(modifier.size(size).clip(CircleShape).background(Paper), contentAlignment = Alignment.Center) {
         if (avatar != null) {
             Image(avatar, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())

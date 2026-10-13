@@ -27,6 +27,9 @@ Deployment: `axelcypher/gitops-homelab`, `apps/docker/closeby`. Public hostname
   admin rights, picture) and deleted.
 - **Frame**: settings of a frame device (Immich album, slideshow timing, night
   mode, ...) and its ordered contact list (persons, each with `autoAnswer`).
+  An admin can give the frame its own contact picture
+  (`PUT /api/admin/frames/{id}/avatar`, read via `GET /api/frames/{id}/avatar`);
+  its persons see it in their list of frames and when it calls.
 - **Call**: one LiveKit room. A frame calls a person, or a person's device calls
   a frame. Calling a person rings all of their devices; the first to accept
   takes the call, the others stop ringing.

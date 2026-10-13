@@ -24,6 +24,7 @@ import net.pendzialek.closeby.api.PartyKind
 import net.pendzialek.closeby.call.CallController
 import net.pendzialek.closeby.call.CallUi
 import net.pendzialek.closeby.data.ApiException
+import net.pendzialek.closeby.data.Images
 import kotlin.coroutines.resume
 
 data class ContactState(
@@ -146,6 +147,7 @@ class ContactController(private val app: CloseByApp) : CallController {
                 kind = PartyKind.FRAME,
                 id = data["fromId"].orEmpty(),
                 name = name,
+                avatarVersion = data["fromAvatarVersion"]?.toLongOrNull(),
             )
         }
         onEvent(Event(type, callId = data["callId"], from = from, reason = data["reason"]))
@@ -155,7 +157,7 @@ class ContactController(private val app: CloseByApp) : CallController {
 
     fun call(frame: FrameRef) {
         if (_state.value.call != CallUi.None) return
-        _state.update { it.copy(call = CallUi.Outgoing(frame.name)) }
+        _state.update { it.copy(call = CallUi.Outgoing(frame.name, Images.framePicture(frame.id, frame.avatarVersion))) }
         updateRealtime()
         scope.launch {
             try {
@@ -224,7 +226,7 @@ class ContactController(private val app: CloseByApp) : CallController {
                 // websocket and FCM both deliver the ring
                 if (call is CallUi.Incoming && call.callId == callId) return
                 if (call != CallUi.None && call !is CallUi.Ended) return
-                _state.update { it.copy(call = CallUi.Incoming(callId, from.name)) }
+                _state.update { it.copy(call = CallUi.Incoming(callId, from.name, Images.framePicture(from.id, from.avatarVersion))) }
                 CallNotifications.showIncoming(app, from.name)
                 updateRealtime()
             }

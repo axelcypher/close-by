@@ -6,19 +6,17 @@ import net.pendzialek.closeby.data.Images
 sealed interface CallUi {
     data object None : CallUi
 
-    /** [personId] and [avatarVersion] show the callee's face; a frame has none. */
+    /** [picture] shows the other side: a path from [Images.personPicture] or [Images.framePicture]. */
     data class Outgoing(
         val name: String,
-        val personId: String? = null,
-        val avatarVersion: Long? = null,
+        val picture: String? = null,
         val callId: String? = null,
     ) : CallUi
 
     data class Incoming(
         val callId: String,
         val name: String,
-        val personId: String? = null,
-        val avatarVersion: Long? = null,
+        val picture: String? = null,
         val autoAnswer: Boolean = false,
     ) : CallUi
 

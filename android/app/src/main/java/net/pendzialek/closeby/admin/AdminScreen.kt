@@ -59,7 +59,7 @@ import net.pendzialek.closeby.ui.Danger
 import net.pendzialek.closeby.ui.Muted
 import net.pendzialek.closeby.ui.Ok
 import net.pendzialek.closeby.ui.Paper
-import net.pendzialek.closeby.ui.PersonAvatar
+import net.pendzialek.closeby.ui.RoundPicture
 import net.pendzialek.closeby.util.Jpeg
 import java.text.DateFormat
 import java.util.Date
@@ -141,20 +141,24 @@ fun AdminScreen(me: Me?, revision: Int, say: (String) -> Unit, onChanged: () -> 
             .onFailure { albumsFailed = true }
     }
 
-    // the picker returns after a possible activity restart, so the target survives it
-    var avatarFor by rememberSaveable { mutableStateOf<String?>(null) }
-    val pickAvatar = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        val personId = avatarFor ?: return@rememberLauncherForActivityResult
-        avatarFor = null
+    // "person:<id>" or "frame:<id>"; the picker returns after a possible activity restart, so the target survives it
+    var pictureFor by rememberSaveable { mutableStateOf<String?>(null) }
+    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val target = pictureFor ?: return@rememberLauncherForActivityResult
+        pictureFor = null
         if (uri == null) return@rememberLauncherForActivityResult
-        actions.perform("Bild gespeichert, die Rahmen zeigen es gleich") {
-            app.api.uploadPersonAvatar(personId, Jpeg.square(context, uri))
+        val (kind, id) = target.split(":", limit = 2)
+        actions.perform("Bild gespeichert") {
+            val jpeg = Jpeg.square(context, uri)
+            if (kind == "frame") app.api.uploadFrameAvatar(id, jpeg) else app.api.uploadPersonAvatar(id, jpeg)
         }
     }
-    val changeAvatar: (String) -> Unit = { personId ->
-        avatarFor = personId
-        pickAvatar.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    fun pick(target: String) {
+        pictureFor = target
+        pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
+    val changeAvatar: (String) -> Unit = { personId -> pick("person:$personId") }
+    val changeFramePicture: (String) -> Unit = { frameId -> pick("frame:$frameId") }
 
     Column(Modifier.fillMaxSize().background(Paper).safeDrawingPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -171,7 +175,7 @@ fun AdminScreen(me: Me?, revision: Int, say: (String) -> Unit, onChanged: () -> 
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             when (tab) {
-                AdminTab.FRAMES -> FramesAdmin(frames, persons, albums, albumsFailed, actions, app.images, changeAvatar)
+                AdminTab.FRAMES -> FramesAdmin(frames, persons, albums, albumsFailed, actions, app.images, changeAvatar, changeFramePicture)
                 AdminTab.PERSONS -> PersonsAdmin(persons, me, actions, app.images, changeAvatar)
             }
         }
@@ -210,13 +214,18 @@ internal fun ConfirmDialog(question: String, confirm: String, onConfirm: () -> U
 
 /** A person's picture with a visible hint that tapping it replaces the picture on every frame. */
 @Composable
-internal fun AvatarPicker(person: PersonInfo, size: Dp, images: Images, onClick: () -> Unit) {
+internal fun AvatarPicker(person: PersonInfo, size: Dp, images: Images, onClick: () -> Unit) =
+    PicturePicker(Images.personPicture(person.id, person.avatarVersion), person.shownName, size, images, onClick)
+
+/** [path] from [Images.personPicture] or [Images.framePicture]. */
+@Composable
+internal fun PicturePicker(path: String?, name: String, size: Dp, images: Images, onClick: () -> Unit) {
     Column(
         Modifier.clickable(onClickLabel = "Bild ändern", onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        PersonAvatar(person.id, person.avatarVersion, person.shownName, size, images)
+        RoundPicture(path, name, size, images)
         Text("Bild ändern", fontSize = 12.sp, color = Accent)
     }
 }

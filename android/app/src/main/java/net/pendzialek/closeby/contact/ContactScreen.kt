@@ -58,6 +58,7 @@ import net.pendzialek.closeby.data.ApiException
 import net.pendzialek.closeby.ui.Accent
 import net.pendzialek.closeby.ui.Muted
 import net.pendzialek.closeby.ui.Ok
+import net.pendzialek.closeby.ui.FrameAvatar
 import net.pendzialek.closeby.ui.Paper
 import net.pendzialek.closeby.ui.PersonAvatar
 import net.pendzialek.closeby.util.Jpeg
@@ -135,8 +136,13 @@ fun ContactScreen(controller: ContactController) {
                 }
                 items(state.frames, key = { it.id }) { frame ->
                     Section {
-                        Text(frame.name, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                        Text(if (frame.online) "online" else "offline", color = if (frame.online) Ok else Muted)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            FrameAvatar(frame.id, frame.avatarVersion, frame.name, 56.dp, app.images)
+                            Column {
+                                Text(frame.name, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                                Text(if (frame.online) "online" else "offline", color = if (frame.online) Ok else Muted)
+                            }
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { controller.call(frame) }, enabled = frame.online && state.call == CallUi.None) {
                                 Text("Anrufen")

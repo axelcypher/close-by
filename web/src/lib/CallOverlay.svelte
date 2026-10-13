@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Track } from "livekit-client";
   import { acceptCall, call, declineCall, hangUp, localVideoTrack, session, toggleCam, toggleMic } from "../session.svelte";
+  import Avatar from "./Avatar.svelte";
 
   const state = $derived(call.state);
   const peer = $derived(state.phase === "incoming" ? state.peer.name : "peer" in state ? state.peer : "");
@@ -49,6 +50,9 @@
     <div class="prompt">
       {#if state.phase === "incoming"}
         <p class="label">Eingehender Anruf</p>
+        {#if state.peer.kind === "frame" && state.peer.avatarVersion != null}
+          <Avatar frameId={state.peer.id} version={state.peer.avatarVersion} name={state.peer.name} size={160} />
+        {/if}
         <h1>{peer}</h1>
         <div class="row actions">
           <button class="hangup big" onclick={declineCall}>Ablehnen</button>

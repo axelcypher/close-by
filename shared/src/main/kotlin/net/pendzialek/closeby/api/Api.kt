@@ -161,9 +161,9 @@ data class SlideshowPhoto(val id: String, val takenAt: String? = null)
 @Serializable
 data class Slideshow(val photos: List<SlideshowPhoto>)
 
-/** A frame as seen by a person's device: something it can call. */
+/** A frame as seen by a person's device: something it can call. Picture: `GET /api/frames/{id}/avatar`. */
 @Serializable
-data class FrameRef(val id: String, val name: String, val online: Boolean)
+data class FrameRef(val id: String, val name: String, val online: Boolean, val avatarVersion: Long? = null)
 
 // ---- admin ----
 
@@ -176,6 +176,8 @@ data class FrameAdmin(
     val albumId: String? = null,
     val settings: FrameSettings,
     val contacts: List<FrameContactEntry>,
+    /** The frame's own picture, shown to the persons it calls; set via `PUT /api/admin/frames/{id}/avatar`. */
+    val avatarVersion: Long? = null,
 )
 
 @Serializable
@@ -202,8 +204,9 @@ enum class PartyKind {
     @SerialName("frame") FRAME,
 }
 
+/** [avatarVersion] belongs to the person's or the frame's picture, depending on [kind]. */
 @Serializable
-data class CallParty(val kind: PartyKind, val id: String, val name: String)
+data class CallParty(val kind: PartyKind, val id: String, val name: String, val avatarVersion: Long? = null)
 
 /** Exactly one target: a frame calls a person, a person's device calls a frame. */
 @Serializable

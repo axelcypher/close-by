@@ -3,16 +3,18 @@
   import { squareJpeg } from "../image";
   import Avatar from "./Avatar.svelte";
 
-  /** Admin: the picture every frame shows for this person. */
+  /** Admin: the picture every frame shows for this person, or with [frameId] the frame's own picture. */
   let {
     personId,
+    frameId,
     version,
     name,
     size = 48,
     onChanged,
     onError,
   }: {
-    personId: string;
+    personId?: string;
+    frameId?: string;
     version?: number | null;
     name: string;
     size?: number;
@@ -29,7 +31,8 @@
     if (!file) return;
     busy = true;
     try {
-      await api.admin.uploadPersonAvatar(personId, await squareJpeg(file, 512));
+      const image = await squareJpeg(file, 512);
+      await (frameId ? api.admin.uploadFrameAvatar(frameId, image) : api.admin.uploadPersonAvatar(personId!, image));
       onChanged();
     } catch (e) {
       onError((e as Error).message);
@@ -39,8 +42,8 @@
   }
 </script>
 
-<label class="picture" title="Bild ändern, das alle Rahmen für {name} zeigen">
-  <Avatar {personId} {version} {name} {size} />
+<label class="picture" title={frameId ? `Bild von ${name}, das beim Anruf erscheint` : `Bild ändern, das alle Rahmen für ${name} zeigen`}>
+  <Avatar {personId} {frameId} {version} {name} {size} />
   <input type="file" accept="image/*" onchange={pick} disabled={busy} />
   <span class="change">{busy ? "lädt …" : "Bild ändern"}</span>
 </label>

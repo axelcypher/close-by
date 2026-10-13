@@ -83,7 +83,20 @@
 
 <article class="card stack">
   <div class="row head">
-    <h2>{frame.device.name}</h2>
+    <div class="row title">
+      <AvatarPicker
+        frameId={frame.device.id}
+        version={frame.avatarVersion}
+        name={frame.device.name}
+        size={56}
+        {onChanged}
+        onError={(message) => (error = message)}
+      />
+      <div>
+        <h2>{frame.device.name}</h2>
+        <span class="muted small">Kontaktbild: erscheint bei allen, die der Rahmen anruft</span>
+      </div>
+    </div>
     <span class="row muted status">
       <span class="dot" class:on={frame.device.online}></span>
       {frame.device.online ? "online" : `zuletzt ${lastSeen(frame.device.lastSeen)}`}
@@ -205,6 +218,9 @@
   }
   .head h2 {
     margin: 0;
+  }
+  .title {
+    flex-wrap: nowrap;
   }
   .status {
     gap: 0.4rem;

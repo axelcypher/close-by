@@ -159,8 +159,8 @@ class Calls(
         return Call(
             id = Secrets.newId(),
             caller = frameDevice,
-            from = CallParty(PartyKind.FRAME, frame.deviceId, frame.name),
-            to = CallParty(PartyKind.PERSON, personId, contact.person.shownName),
+            from = CallParty(PartyKind.FRAME, frame.deviceId, frame.name, frame.avatarVersion),
+            to = CallParty(PartyKind.PERSON, personId, contact.person.shownName, contact.person.avatarVersion),
             callees = store.devicesOfPerson(personId).filter { it.kind != DeviceKind.FRAME },
             autoAnswer = false,
         )
@@ -174,8 +174,8 @@ class Calls(
         return Call(
             id = Secrets.newId(),
             caller = device,
-            from = CallParty(PartyKind.PERSON, personId, contact.person.shownName),
-            to = CallParty(PartyKind.FRAME, frame.deviceId, frame.name),
+            from = CallParty(PartyKind.PERSON, personId, contact.person.shownName, contact.person.avatarVersion),
+            to = CallParty(PartyKind.FRAME, frame.deviceId, frame.name, frame.avatarVersion),
             callees = listOf(frameDevice),
             autoAnswer = contact.autoAnswer,
         )
@@ -209,6 +209,7 @@ class Calls(
             put("fromKind", it.kind.name.lowercase())
             put("fromId", it.id)
             put("fromName", it.name)
+            it.avatarVersion?.let { version -> put("fromAvatarVersion", version.toString()) }
         }
         autoAnswer?.let { put("autoAnswer", it.toString()) }
         reason?.let { put("reason", it) }

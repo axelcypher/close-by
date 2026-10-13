@@ -36,13 +36,19 @@ export interface FrameSettings {
   brightness?: number | null;
   forcePublicDns: boolean;
 }
-export interface FrameRef { id: string; name: string; online: boolean }
+export interface FrameRef { id: string; name: string; online: boolean; avatarVersion?: number }
 export interface FrameContactEntry { personId: string; autoAnswer: boolean }
-export interface FrameAdmin { device: DeviceInfo; albumId?: string; settings: FrameSettings; contacts: FrameContactEntry[] }
+export interface FrameAdmin {
+  device: DeviceInfo;
+  albumId?: string;
+  settings: FrameSettings;
+  contacts: FrameContactEntry[];
+  avatarVersion?: number;
+}
 export interface PersonAdmin { person: PersonInfo; devices: DeviceInfo[] }
 export interface ImmichAlbum { id: string; name: string; assetCount: number }
 
-export interface CallParty { kind: "person" | "frame"; id: string; name: string }
+export interface CallParty { kind: "person" | "frame"; id: string; name: string; avatarVersion?: number }
 export interface CallJoin { callId: string; livekitUrl: string; token: string }
 
 export interface ServerEvent {
@@ -137,6 +143,8 @@ export const api = {
     moveDevice: (id: string, personId: string) => request<void>("PUT", `/api/admin/devices/${id}`, { personId }),
     uploadPersonAvatar: (id: string, image: Blob) =>
       request<void>("PUT", `/api/admin/persons/${id}/avatar`, image, { "Content-Type": image.type }),
+    uploadFrameAvatar: (id: string, image: Blob) =>
+      request<void>("PUT", `/api/admin/frames/${id}/avatar`, image, { "Content-Type": image.type }),
     frameCommand: (id: string, command: "maintenance" | "update" | "release") =>
       request<void>("POST", `/api/admin/frames/${id}/command`, { command }),
     invite: () => request<InviteResponse>("POST", "/api/admin/invites"),
@@ -144,22 +152,29 @@ export const api = {
   },
 };
 
-/** Avatars need the bearer token, so <img src> can't load them directly. */
-const avatarCache = new Map<string, Promise<string | null>>();
+/** Pictures need the bearer token, so <img src> can't load them directly. */
+const pictureCache = new Map<string, Promise<string | null>>();
 
-export function avatarUrl(personId: string, version?: number | null): Promise<string | null> {
-  if (version == null) return Promise.resolve(null);
-  const key = `${personId}:${version}`;
-  let url = avatarCache.get(key);
+function pictureUrl(path: string): Promise<string | null> {
+  let url = pictureCache.get(path);
   if (!url) {
     const token = storedToken();
-    url = fetch(`/api/persons/${personId}/avatar?v=${version}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    url = fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
       .then((r) => (r.ok ? r.blob() : null))
       .then((blob) => (blob ? URL.createObjectURL(blob) : null))
       .catch(() => null);
-    avatarCache.set(key, url);
+    pictureCache.set(path, url);
   }
   return url;
+}
+
+export function avatarUrl(personId: string, version?: number | null): Promise<string | null> {
+  return version == null ? Promise.resolve(null) : pictureUrl(`/api/persons/${personId}/avatar?v=${version}`);
+}
+
+/** The frame's own picture, the one its persons see. */
+export function frameAvatarUrl(frameId: string, version?: number | null): Promise<string | null> {
+  return version == null ? Promise.resolve(null) : pictureUrl(`/api/frames/${frameId}/avatar?v=${version}`);
 }
 
 export function formatCode(code: string) {

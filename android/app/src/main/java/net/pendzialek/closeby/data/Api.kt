@@ -153,6 +153,12 @@ class Api(private val prefs: Prefs, cacheDir: File) {
     suspend fun setFrameContacts(id: String, contacts: List<FrameContactEntry>) =
         put("/api/admin/frames/$id/contacts", contacts, ListSerializer(FrameContactEntry.serializer()))
 
+    /** The frame's own picture, shown to the persons it calls. */
+    suspend fun uploadFrameAvatar(id: String, jpeg: ByteArray) = call<Unit>(
+        request("/api/admin/frames/$id/avatar").put(jpeg.toRequestBody(JPEG)).build(),
+        null,
+    )
+
     suspend fun frameCommand(id: String, command: String) = post<FrameCommandRequest, Unit>(
         "/api/admin/frames/$id/command",
         FrameCommandRequest(command),
