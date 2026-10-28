@@ -14,14 +14,17 @@
 
   async function start() {
     clearTimeout(retryTimer);
-    offline = false;
     if (storedToken()) {
+      // never the setup screen while a signed-in device waits for /api/me; retries keep the offline screen
+      if (!offline) loading = true;
       try {
         await loadMe();
+        offline = false;
         retryMs = 2000;
         connectRealtime();
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
+          offline = false;
           logout();
         } else {
           // e.g. the server restarts for a release; the tray app must come back on its own to ring again
@@ -30,6 +33,8 @@
           retryMs = Math.min(retryMs * 2, 60_000);
         }
       }
+    } else {
+      offline = false;
     }
     loading = false;
   }

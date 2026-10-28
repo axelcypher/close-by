@@ -162,6 +162,7 @@ function handleEvent(event: ServerEvent) {
 
 interface TauriWindow {
   show(): Promise<void>;
+  isVisible(): Promise<boolean>;
   unminimize(): Promise<void>;
   setFocus(): Promise<void>;
   requestUserAttention(type: number | null): Promise<void>;
@@ -210,6 +211,8 @@ async function checkForNewBuild() {
     sessionStorage.setItem(RELOADED_FOR_KEY, latest);
     session.updateReady = true;
     document.addEventListener("visibilitychange", () => reloadIfOutdated());
+    // a window hidden to the tray sends no event (WebView2 keeps the page "visible"): look now and then
+    setInterval(() => reloadIfOutdated(), 60_000);
     reloadIfOutdated();
   } catch {
     // offline or no sessionStorage: try again after the next reconnect
@@ -217,8 +220,17 @@ async function checkForNewBuild() {
 }
 
 /** Reloads into the new build, but not during a call and not under someone's hands. */
-export function reloadIfOutdated(force = false) {
-  if (session.updateReady && call.state.phase === "idle" && (force || document.hidden)) location.reload();
+export async function reloadIfOutdated(force = false) {
+  if (!session.updateReady || call.state.phase !== "idle") return;
+  if (!force && !(await unwatched())) return;
+  if (call.state.phase === "idle") location.reload();
+}
+
+/** Nobody looks: a background tab, or the Windows app's window sits in the tray. */
+async function unwatched(): Promise<boolean> {
+  if (document.hidden) return true;
+  const desktop = tauriWindow();
+  return desktop ? !(await desktop.isVisible().catch(() => true)) : false;
 }
 
 // ---- calls ----
@@ -256,7 +268,11 @@ export async function acceptCall() {
   call.state = { phase: "active", callId: state.callId, peer: state.peer.name };
   try {
     const join = await api.acceptCall(state.callId);
-    if (mine !== attempt) return; // hung up meanwhile, which ended the call on the server
+    if (mine !== attempt) {
+      // hung up meanwhile; that hang-up may have reached the server before the accept
+      api.endCall(state.callId).catch(() => {});
+      return;
+    }
     await joinRoom(mine, join.livekitUrl, join.token);
   } catch (e) {
     if (mine !== attempt) return;
@@ -352,6 +368,11 @@ async function joinRoom(mine: number, url: string, token: string) {
   } catch {
     if (stale()) return void current.disconnect();
     throw new MicrophoneUnavailable();
+  }
+  if (stale()) {
+    // no camera prompt for a call that is over
+    microphone.stop();
+    return void current.disconnect();
   }
   const camera = await createLocalVideoTrack().catch(() => null);
   const tracks = camera ? [microphone, camera] : [microphone];

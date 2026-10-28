@@ -16,6 +16,8 @@
     ...(isAdmin ? ([["frames", "Rahmen"], ["persons", "Personen"]] as [Tab, string][]) : []),
     ["profile", "Profil"],
   ]);
+  // e.g. an admin who just gave up their admin rights
+  const current = $derived(tabs.some(([id]) => id === tab) ? tab : "call");
 </script>
 
 <div class="layout">
@@ -26,7 +28,7 @@
     </div>
     <nav>
       {#each tabs as [id, label] (id)}
-        <button class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
+        <button class:active={current === id} onclick={() => (tab = id)}>{label}</button>
       {/each}
     </nav>
     <div class="me">
@@ -45,11 +47,11 @@
         <button onclick={() => reloadIfOutdated(true)}>Jetzt neu laden</button>
       </div>
     {/if}
-    {#if tab === "call"}
+    {#if current === "call"}
       <CallFrames />
-    {:else if tab === "frames"}
+    {:else if current === "frames"}
       <FramesAdmin />
-    {:else if tab === "persons"}
+    {:else if current === "persons"}
       <PersonsAdmin />
     {:else}
       <Profile />

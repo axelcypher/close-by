@@ -65,8 +65,13 @@
   async function save() {
     error = invalidSettings() ?? "";
     if (error) return;
+    // edits made while the requests run mark the editor dirty again and survive the reload
+    const sendSettings = settingsDirty;
+    const sendContacts = contactsDirty;
+    settingsDirty = false;
+    contactsDirty = false;
     try {
-      if (settingsDirty) {
+      if (sendSettings) {
         await api.admin.updateFrame(frame.device.id, {
           name,
           albumId: albumId || null,
@@ -77,18 +82,18 @@
           },
         });
       }
-      if (contactsDirty) {
+      if (sendContacts) {
         // keep persons added on the server since editing began, drop persons that no longer exist
         const added = frame.contacts.filter((c) => !baseContacts.includes(c.personId) && !contacts.some((own) => own.personId === c.personId));
         const next = [...contacts, ...added].filter((c) => personById.has(c.personId));
         await api.admin.setFrameContacts(frame.device.id, next);
       }
-      settingsDirty = false;
-      contactsDirty = false;
       saved = "Gespeichert, der Rahmen übernimmt es sofort.";
       setTimeout(() => (saved = ""), 3000);
       onChanged();
     } catch (e) {
+      settingsDirty ||= sendSettings;
+      contactsDirty ||= sendContacts;
       error = (e as Error).message;
     }
   }
