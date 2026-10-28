@@ -16,6 +16,8 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # the production server, whose installed apps the new APK must be able to update
+  PUBLIC_URL: https://closeby.pendzialek.net
 
 jobs:
   test:
@@ -44,12 +46,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      # monotonically increasing, so installed frames accept the update
-      CLOSEBY_VERSION_CODE: ${{ github.run_number }}
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      # Monotonically increasing, so installed apps accept the update. A re-run builds a
+      # different APK (secrets may have changed), so it needs a code of its own.
+      - name: Number the release
+        run: |
+          code=$(( GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT ))
+          name="0.1.${GITHUB_RUN_NUMBER}"
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then name="${name}.${GITHUB_RUN_ATTEMPT}"; fi
+          echo "CLOSEBY_VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "CLOSEBY_VERSION_NAME=$name" >> "$GITHUB_ENV"
 
       - name: Set up Java
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -75,16 +84,50 @@ jobs:
 
       - name: Build release APK
         env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
         run: ./gradlew -p android :app:assembleRelease --console=plain
+
+      # Installed apps only take an update signed with their key and with a higher
+      # versionCode; anything else would be fetched every six hours and fail silently.
+      - name: Check release against production
+        if: github.event_name != 'pull_request'
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          test -f "$apk" || { echo "::error::no signed APK (unsigned builds are app-release-unsigned.apk)"; exit 1; }
+          apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          signed=$("$apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          test -n "$signed" || { echo "::error::APK signature does not verify"; exit 1; }
+
+          # production publishes its signing certificate for App Links
+          if links=$(curl -fsS --max-time 20 "$PUBLIC_URL/.well-known/assetlinks.json"); then
+            expected=$(echo "$links" | jq -r '.[0].target.sha256_cert_fingerprints[0]' | tr -d ':' | tr 'A-F' 'a-f')
+            if [ "$signed" != "$expected" ]; then
+              echo "::error::APK is signed with $signed, production expects $expected (ANDROID_CERT_SHA256); installed apps would refuse it"
+              exit 1
+            fi
+          else
+            echo "::warning::production unreachable, signing certificate not compared"
+          fi
+
+          live=$(curl -fsS --max-time 20 "$PUBLIC_URL/api/app/android" | jq -r '.versionCode // empty' || true)
+          if [ -z "$live" ]; then
+            echo "::warning::no published release found, versionCode not compared"
+          elif [ "$CLOSEBY_VERSION_CODE" -le "$live" ]; then
+            echo "::error::versionCode $CLOSEBY_VERSION_CODE is not above the published $live; installed apps would ignore it"
+            exit 1
+          fi
 
       - name: Describe release
         run: |
           mkdir -p apk
-          cp android/app/build/outputs/apk/release/app-release*.apk apk/closeby.apk
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            cp android/app/build/outputs/apk/release/app-release*.apk apk/closeby.apk
+          else
+            cp android/app/build/outputs/apk/release/app-release.apk apk/closeby.apk
+          fi
           sha=$(sha256sum apk/closeby.apk | cut -d' ' -f1)
-          printf '{"versionCode":%s,"versionName":"0.1.%s","sha256":"%s"}\n' \
-            "$CLOSEBY_VERSION_CODE" "$CLOSEBY_VERSION_CODE" "$sha" > apk/version.json
+          printf '{"versionCode":%s,"versionName":"%s","sha256":"%s"}\n' \
+            "$CLOSEBY_VERSION_CODE" "$CLOSEBY_VERSION_NAME" "$sha" > apk/version.json
           cat apk/version.json
 
       - name: Keep APK for the image
@@ -160,11 +203,11 @@ jobs:
           path: docker/desktop
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1 # v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -172,7 +215,7 @@ jobs:
 
       - name: Generate image metadata
         id: meta
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7 # v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -182,7 +225,7 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4 # v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -218,7 +261,23 @@ jobs:
       TARGET_IMAGE_KEY: CLOSEBY_IMAGE_VERSION
       IMAGE_TAG: ${{ needs.image.outputs.published_tag }}
     steps:
+      # A re-run of an older run (or a dispatch on an old commit) must not roll production back:
+      # older images may lack database migrations and APK versions newer ones already shipped.
+      - name: Deploy only the tip of main
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$tip" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::main is at $tip by now, not deploying $GITHUB_SHA"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out deployment repository
+        if: steps.tip.outputs.current == 'true'
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ${{ env.TARGET_REPOSITORY }}
@@ -227,6 +286,7 @@ jobs:
           path: deployment-repository
 
       - name: Update image tag
+        if: steps.tip.outputs.current == 'true'
         working-directory: deployment-repository
         run: |
           test -f "$TARGET_ENV_FILE"
@@ -234,6 +294,7 @@ jobs:
           grep -q "^${TARGET_IMAGE_KEY}=${IMAGE_TAG}$" "$TARGET_ENV_FILE"
 
       - name: Commit and push
+        if: steps.tip.outputs.current == 'true'
         working-directory: deployment-repository
         run: |
           git add -- "$TARGET_ENV_FILE"
@@ -244,4 +305,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: deploy CloseBy ${GITHUB_SHA::12}"
-          git push origin HEAD:main
+          # other apps deploy into the same repository; catch up and try again
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            sleep $((attempt * 5))
+            git pull --rebase origin main
+          done
+          echo "::error::could not push the deployment"
+          exit 1

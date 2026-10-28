@@ -47,7 +47,9 @@ SHA-256. Revoking a device deletes its access immediately.
 | Extra device of a person (PC) | PC: `POST /api/pairing/start` -> shows QR | the person's phone scans: `POST /api/pairing/claim` |
 
 The device that started a pairing polls `GET /api/pairing/{id}` with its poll
-secret until it receives its token.
+secret until it receives its token. A claim may name the `expectedKind` (the
+admin pages send `frame`); a code of another kind is refused with 409 and
+burnt, so nobody can pass off a PC's code as a frame's.
 
 ## Calls
 
@@ -63,13 +65,21 @@ caller                      backend                         callee device(s)
 ```
 
 Unanswered calls end as `missed` after `CALL_RING_TIMEOUT_SECONDS`.
-`POST /api/calls/{id}/decline` ends the call for all callee devices.
+`POST /api/calls/{id}/decline` ends the call for all callee devices. FCM
+messages go out in order on a queue of their own, so a slow FCM never delays
+the HTTP answer. Clients don't rely on every event arriving: they stop ringing
+on their own after 60 s, drop a late duplicate of a ring they already handled,
+treat the other side joining the room as "accepted", and end the call when the
+other side doesn't show up in the room (30 s) or leaves it (15 s).
 
 ## Realtime channel
 
 `GET /api/ws` (WebSocket). The first client message must be
 `{"type":"auth","token":"..."}` (browsers can't set headers on WebSockets, and
-tokens must not end up in access logs as query strings). Server events:
+tokens must not end up in access logs as query strings). An unknown token
+closes the socket with 1008; a missing or garbled auth message (slow network)
+with 4408, which clients treat like any other drop. The Android app signs out
+only after `/api/me` refused its token twice, a minute apart. Server events:
 `call.incoming`, `call.accepted`, `call.declined`, `call.ended`, `call.taken`,
 `config.changed`.
 
@@ -96,6 +106,11 @@ shows a full-screen notification. If the power button turns the screen off
 while the frame is charging (and it is not night), the app wakes it again. Without device owner the frame still works,
 but asks for permissions and update confirmations.
 
+A locked frame that has been offline for five minutes (new router, changed
+Wi-Fi password) offers "WLAN einrichten" on its offline banner: the same
+ten-minute maintenance window as the admin command, straight into the Wi-Fi
+settings.
+
 ## Photos
 
 The backend reads the frame's Immich album with its own API key, caches the
@@ -105,10 +120,28 @@ talk to the backend: `GET /api/frame/slideshow`, `GET /api/photos/{assetId}`.
 ## App updates
 
 CI builds the signed APK and bakes it into the backend image
-(`/app/apk/closeby.apk` + `version.json`). `GET /api/app/android` returns the
-latest version; frames running as device owner install it silently. On
+(`/app/apk/closeby.apk` + `version.json`). The versionCode is
+`run_number * 100 + run_attempt`; before the image is built CI checks that the
+APK is signed with the certificate production publishes in
+`/.well-known/assetlinks.json` and that its versionCode is above the published
+one, and only the current tip of `main` is deployed (a re-run of an old run
+must not roll back migrations or APKs). `GET /api/app/android` returns the
+latest version, with a download URL per version; frames running as device owner
+install it silently. No update replaces the app during a call. A frame that
+restarts within three minutes of its last start (perhaps a crashing release)
+looks for an update after 5 s instead of 60 s, so a fix can arrive without
+anybody on site. On
 Android 12+ a self-update needs no confirmation either once CloseBy may install
 apps (`UPDATE_PACKAGES_WITHOUT_USER_ACTION`): phones check every six hours on
 Wi-Fi while the app is closed (`UpdateJob`), and the contact screen offers a
 newer version with a button, which also leads through that permission. The APK
 is also downloadable without login under `/download`.
+
+The web client checks after every websocket reconnect (each deploy restarts
+the backend) whether the page names a newer bundle, and reloads once no call
+is going on and nobody looks at it (or right away from the banner). This is the
+only update channel of the Windows app, which has no updater of its own.
+
+Database migrations are append-only and tracked by `PRAGMA user_version`. An
+older image never lowers that version, and tables or columns that exist
+already are skipped, so a rollback followed by a roll-forward is safe.
