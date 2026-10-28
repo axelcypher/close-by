@@ -86,7 +86,15 @@ class PairingViewModel(application: Application) : AndroidViewModel(application)
             _state.value = PairingUi.Waiting(pairing)
             while (System.currentTimeMillis() < pairing.expiresAt) {
                 delay(2_000)
-                val status = runCatching { app.api.pollPairing(pairing.pairingId, pairing.pollSecret) }.getOrNull() ?: continue
+                val status = try {
+                    app.api.pollPairing(pairing.pairingId, pairing.pollSecret)
+                } catch (e: ApiException) {
+                    // the code is gone (e.g. refused as the wrong kind of device): show a fresh one
+                    if (e.status == 404) return@launch startFrame(server)
+                    continue
+                } catch (_: Exception) {
+                    continue
+                }
                 if (status.state == PairingState.DONE && status.token != null) {
                     app.paired(AppMode.FRAME, status.token!!, status.deviceId!!)
                     return@launch

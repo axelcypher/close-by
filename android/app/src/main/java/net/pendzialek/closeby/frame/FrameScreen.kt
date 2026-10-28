@@ -139,7 +139,9 @@ private fun Offline(since: Long?) {
                 app.startMaintenance()
                 // the kiosk has to be open before another app can come to the front
                 runCatching { activity.stopLockTask() }
-                activity.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                // some ROMs have no Wi-Fi page of their own
+                runCatching { activity.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    .recoverCatching { activity.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }) { Text("WLAN einrichten") }
         }
     }

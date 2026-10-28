@@ -202,15 +202,20 @@ fun ContactScreen(controller: ContactController) {
                     var code by remember { mutableStateOf("") }
                     Section {
                         Text("Geräte", fontWeight = FontWeight.SemiBold)
-                        Text("Rahmen oder PC verknüpfen: den angezeigten QR-Code scannen oder den Code eingeben.", color = Muted)
+                        // only PCs here: a code that is not a PC's (a stranger's "frame code") is refused
+                        Text(
+                            "PC verknüpfen: den QR-Code scannen, den CloseBy am PC zeigt, oder den Code eingeben. " +
+                                "Rahmen fügen Admins unter „Verwaltung“ hinzu.",
+                            color = Muted,
+                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Button(onClick = {
-                                scanQr(context) { raw -> scope.launch { say(claim(app, pairCode(raw) ?: raw)) } }
+                                scanQr(context) { raw -> scope.launch { say(claim(app, pairCode(raw) ?: raw, DeviceKind.DESKTOP)) } }
                             }) { Text("QR-Code scannen") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(code, { code = it }, label = { Text("Code") }, singleLine = true, modifier = Modifier.weight(1f))
-                            OutlinedButton(onClick = { scope.launch { say(claim(app, code)); code = "" } }, enabled = code.isNotBlank()) {
+                            OutlinedButton(onClick = { scope.launch { say(claim(app, code, DeviceKind.DESKTOP)); code = "" } }, enabled = code.isNotBlank()) {
                                 Text("Übernehmen")
                             }
                         }
@@ -264,7 +269,8 @@ internal suspend fun claim(app: CloseByApp, code: String, expectedKind: DeviceKi
     when {
         e.status == 404 -> "Code unbekannt oder abgelaufen"
         e.status == 403 -> "Rahmen kann nur ein Admin übernehmen"
-        e.status == 409 && e.message == "wrong kind" -> "Das ist nicht der Code eines Rahmens, er gilt jetzt nicht mehr"
+        e.status == 409 && e.message == "wrong kind" ->
+            if (expectedKind == DeviceKind.FRAME) "Das ist nicht der Code eines Rahmens, er gilt jetzt nicht mehr" else "Das ist nicht der Code eines PCs, er gilt jetzt nicht mehr"
         else -> "Das hat nicht geklappt"
     }
 } catch (_: Exception) {

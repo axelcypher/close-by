@@ -107,7 +107,7 @@ class CloseByApp : Application() {
     /** Starts the frame logic once; the service and the activity both call this. */
     fun ensureFrameRunning(mode: AppMode? = _mode.value) {
         if (mode != AppMode.FRAME || frameController != null) return
-        // first, so a release that crashes in the frame logic can still be replaced
+        // first, so a release that crashes in the frame logic (later than a few seconds after start) can still be replaced
         startUpdateLoop()
         frameController = FrameController(this).apply {
             onIncomingWhileHidden = { name -> FrameService.showIncoming(this@CloseByApp, name) }
@@ -147,13 +147,15 @@ class CloseByApp : Application() {
     /**
      * The server called our token unknown (websocket 1008, HTTP 401). A proxy or a restart
      * can say so as well, and a frame that signs out has to be paired again on site:
-     * only /api/me refusing us twice, a minute apart, counts as revoked.
+     * only /api/me refusing us again and again counts as revoked (a phone: twice within a
+     * minute; a frame: three times over a quarter of an hour).
      */
     fun checkRevoked() {
         if (revocationCheck?.isActive == true || prefs.token == null) return
+        val frame = _mode.value == AppMode.FRAME
         revocationCheck = scope.launch {
-            repeat(2) { attempt ->
-                if (attempt > 0) delay(60_000)
+            repeat(if (frame) 3 else 2) { attempt ->
+                if (attempt > 0) delay(if (frame) 7 * 60_000L + 30_000L else 60_000L)
                 val refused = try {
                     api.me()
                     false

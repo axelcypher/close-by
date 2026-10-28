@@ -116,6 +116,8 @@ class CallSession(private val context: Context, private val api: Api) {
         try {
             newRoom.connect(join.livekitUrl, join.token)
             if (room !== newRoom) return
+            // already there before we were: no ParticipantConnected for them
+            if (newRoom.remoteParticipants.isNotEmpty()) onPeerJoined()
             newRoom.localParticipant.setMicrophoneEnabled(true)
             if (room !== newRoom) return
             // without the camera permission the call still works, with sound only
