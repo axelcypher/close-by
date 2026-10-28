@@ -73,7 +73,16 @@ class Api(private val prefs: Prefs, cacheDir: File) {
         .bootstrapDnsHosts(InetAddress.getByName("1.1.1.1"), InetAddress.getByName("1.0.0.1"))
         .build()
 
-    private val viaPublicDns = base.newBuilder().dns(publicDns).build()
+    /** Public DNS first; on a network that blocks it (and nothing else), the local resolver still gets a say. */
+    private val publicThenSystem = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> = try {
+            publicDns.lookup(hostname)
+        } catch (e: IOException) {
+            runCatching { Dns.SYSTEM.lookup(hostname) }.getOrElse { throw e }
+        }
+    }
+
+    private val viaPublicDns = base.newBuilder().dns(publicThenSystem).build()
 
     /** Also handed to LiveKit, so its signaling connection resolves the same way. */
     val client: OkHttpClient get() = if (prefs.forcePublicDns) viaPublicDns else base
@@ -112,8 +121,13 @@ class Api(private val prefs: Prefs, cacheDir: File) {
     suspend fun register(request: RegisterRequest): AuthResponse =
         post("/api/register", request, RegisterRequest.serializer(), AuthResponse.serializer())
 
-    suspend fun claimPairing(code: String): PairingClaimResponse =
-        post("/api/pairing/claim", PairingClaimRequest(code), PairingClaimRequest.serializer(), PairingClaimResponse.serializer())
+    /** [expectedKind]: the server refuses (and burns) a code of another kind of device. */
+    suspend fun claimPairing(code: String, expectedKind: DeviceKind? = null): PairingClaimResponse = post(
+        "/api/pairing/claim",
+        PairingClaimRequest(code, expectedKind),
+        PairingClaimRequest.serializer(),
+        PairingClaimResponse.serializer(),
+    )
 
     suspend fun frames(): List<FrameRef> = get("/api/frames", ListSerializer(FrameRef.serializer()))
 

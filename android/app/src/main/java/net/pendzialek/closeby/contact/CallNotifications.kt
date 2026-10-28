@@ -1,5 +1,6 @@
 package net.pendzialek.closeby.contact
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,11 +9,13 @@ import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
@@ -20,6 +23,7 @@ import androidx.core.content.ContextCompat
 import net.pendzialek.closeby.CloseByApp
 import net.pendzialek.closeby.R
 import net.pendzialek.closeby.ui.MainActivity
+import java.util.UUID
 
 /**
  * The phone side of ringing: an insistent call notification with a full-screen
@@ -33,9 +37,19 @@ object CallNotifications {
     const val ACTION_ACCEPT = "net.pendzialek.closeby.ACCEPT"
     const val ACTION_DECLINE = "net.pendzialek.closeby.DECLINE"
     const val ACTION_HANG_UP = "net.pendzialek.closeby.HANG_UP"
+    const val EXTRA_ACCEPT_TOKEN = "acceptToken"
+
+    /**
+     * MainActivity is exported (launcher, invite links): an ACCEPT intent only counts with the
+     * token of the ring on screen, so no other app (and no replayed intent) can answer a call.
+     */
+    @Volatile
+    var acceptToken: String? = null
+        private set
 
     fun showIncoming(context: Context, name: String) {
         ensureChannels(context)
+        acceptToken = UUID.randomUUID().toString()
         val caller = Person.Builder().setName(name).setImportant(true).build()
         val notification = NotificationCompat.Builder(context, CHANNEL_INCOMING)
             .setSmallIcon(R.drawable.ic_notification)
@@ -51,8 +65,10 @@ object CallNotifications {
         context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_INCOMING, notification)
     }
 
-    fun clearIncoming(context: Context) =
+    fun clearIncoming(context: Context) {
+        acceptToken = null
         context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_INCOMING)
+    }
 
     fun ongoing(context: Context, name: String): Notification {
         ensureChannels(context)
@@ -68,7 +84,10 @@ object CallNotifications {
 
     private fun activity(context: Context, action: String?): PendingIntent = PendingIntent.getActivity(
         context, action.hashCode(),
-        Intent(context, MainActivity::class.java).setAction(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        Intent(context, MainActivity::class.java)
+            .setAction(action)
+            .apply { if (action == ACTION_ACCEPT) putExtra(EXTRA_ACCEPT_TOKEN, acceptToken) }
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -115,22 +134,36 @@ class OngoingCallService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val name = intent?.getStringExtra(EXTRA_NAME) ?: "CloseBy"
-        val type = if (Build.VERSION.SDK_INT >= 30) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        } else {
-            0
+        // Android 14+ refuses a service type whose permission is missing; the camera is optional
+        val type = when {
+            Build.VERSION.SDK_INT < 30 -> 0
+            granted(this, Manifest.permission.CAMERA) ->
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         }
-        ServiceCompat.startForeground(this, CallNotifications.NOTIFICATION_ONGOING, CallNotifications.ongoing(this, name), type)
+        try {
+            ServiceCompat.startForeground(this, CallNotifications.NOTIFICATION_ONGOING, CallNotifications.ongoing(this, name), type)
+        } catch (e: Exception) {
+            // the call still runs, only not with the screen off
+            Log.w("CloseBy", "ongoing call service refused: ${e.message}")
+        }
         return START_NOT_STICKY
     }
 
     companion object {
         private const val EXTRA_NAME = "name"
 
-        fun start(context: Context, name: String) = ContextCompat.startForegroundService(
-            context,
-            Intent(context, OngoingCallService::class.java).putExtra(EXTRA_NAME, name),
-        )
+        private fun granted(context: Context, permission: String) =
+            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+        /** Without the microphone there is no call to keep alive (the call itself fails on that). */
+        fun start(context: Context, name: String) {
+            if (!granted(context, Manifest.permission.RECORD_AUDIO)) return
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, OngoingCallService::class.java).putExtra(EXTRA_NAME, name),
+            )
+        }
 
         fun stop(context: Context) {
             context.stopService(Intent(context, OngoingCallService::class.java))

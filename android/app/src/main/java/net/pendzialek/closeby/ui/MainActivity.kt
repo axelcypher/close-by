@@ -24,6 +24,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.delay
 import net.pendzialek.closeby.CloseByApp
+import net.pendzialek.closeby.call.CallUi
 import net.pendzialek.closeby.contact.CallNotifications
 import net.pendzialek.closeby.contact.ContactScreen
 import net.pendzialek.closeby.contact.inviteCode
@@ -39,12 +40,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIntent(intent)
+        // before the first frame: a ring's full-screen intent has to show over the lock screen at once
+        overLockScreen(app.mode.value == AppMode.FRAME || app.inCall())
+        // a recreated activity (rotation, process restore) must not answer a later call again
+        if (savedInstanceState == null) handleIntent(intent)
         setContent {
             CloseByTheme {
                 val mode by app.mode.collectAsState()
                 val maintenanceUntil by app.maintenanceUntil.collectAsState()
                 LaunchedEffect(mode) { applyWindowMode(mode) }
+                LaunchedEffect(mode) {
+                    if (mode != AppMode.CONTACT) return@LaunchedEffect overLockScreen(mode == AppMode.FRAME)
+                    // a phone shows CloseBy over its lock screen while a call rings or runs, never the rest of the app
+                    app.contactController?.state?.collect { overLockScreen(it.call != CallUi.None && it.call !is CallUi.Ended) }
+                }
                 val releaseRequested by app.releaseRequested.collectAsState()
                 LaunchedEffect(releaseRequested) {
                     if (!releaseRequested) return@LaunchedEffect
@@ -74,13 +83,22 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleIntent(intent)
     }
 
     /** Invite links (`https://…/invite/<code>`) and "Annehmen" from the call notification. */
     private fun handleIntent(intent: android.content.Intent?) {
         intent?.data?.toString()?.let(::inviteCode)?.let { app.openInvite(it) }
-        if (intent?.action == CallNotifications.ACTION_ACCEPT) app.contactController?.accept()
+        if (intent?.action == CallNotifications.ACTION_ACCEPT) {
+            val token = intent.getStringExtra(CallNotifications.EXTRA_ACCEPT_TOKEN)
+            if (token != null && token == CallNotifications.acceptToken) app.contactController?.accept()
+        }
+    }
+
+    private fun overLockScreen(show: Boolean) {
+        setShowWhenLocked(show)
+        setTurnScreenOn(show)
     }
 
     override fun onResume() {

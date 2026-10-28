@@ -255,15 +255,16 @@ fun scanQr(context: Context, onResult: (String) -> Unit) {
     }
 }
 
-internal suspend fun claim(app: CloseByApp, code: String): String = try {
-    when (app.api.claimPairing(code).kind) {
+internal suspend fun claim(app: CloseByApp, code: String, expectedKind: DeviceKind? = null): String = try {
+    when (app.api.claimPairing(code, expectedKind).kind) {
         DeviceKind.FRAME -> "Rahmen übernommen"
         else -> "Gerät verknüpft"
     }
 } catch (e: ApiException) {
-    when (e.status) {
-        404 -> "Code unbekannt oder abgelaufen"
-        403 -> "Rahmen kann nur ein Admin übernehmen"
+    when {
+        e.status == 404 -> "Code unbekannt oder abgelaufen"
+        e.status == 403 -> "Rahmen kann nur ein Admin übernehmen"
+        e.status == 409 && e.message == "wrong kind" -> "Das ist nicht der Code eines Rahmens, er gilt jetzt nicht mehr"
         else -> "Das hat nicht geklappt"
     }
 } catch (_: Exception) {

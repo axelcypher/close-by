@@ -8,6 +8,7 @@ plugins {
 
 // CI passes these; local builds are debug-signed with versionCode 1
 val versionCodeFromCi = System.getenv("CLOSEBY_VERSION_CODE")?.toInt() ?: 1
+val versionNameFromCi = System.getenv("CLOSEBY_VERSION_NAME") ?: "0.1.$versionCodeFromCi"
 val keystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")
 
 android {
@@ -20,7 +21,7 @@ android {
         minSdk = 28
         targetSdk = 36
         versionCode = versionCodeFromCi
-        versionName = "0.1.$versionCodeFromCi"
+        versionName = versionNameFromCi
         buildConfigField("String", "DEFAULT_SERVER", "\"https://closeby.pendzialek.net\"")
         // phones and Fire tablets are ARM; x86 builds of WebRTC only bloat the APK
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
