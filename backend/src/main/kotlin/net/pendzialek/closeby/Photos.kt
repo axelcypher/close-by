@@ -31,6 +31,8 @@ import kotlinx.serialization.json.add
 import net.pendzialek.closeby.api.ImmichAlbum
 import net.pendzialek.closeby.api.SlideshowPhoto
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 interface PhotoSource {
     suspend fun albums(): List<ImmichAlbum>
@@ -193,41 +195,59 @@ class PhotoService(
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val previews = File(cacheDir, "previews").apply { mkdirs() }
+    /** Album id to (fetched at, photos); kept past its TTL as a fallback while Immich is down. */
     private val albums = mutableMapOf<String, Pair<Long, List<SlideshowPhoto>>>()
     private val mutex = Mutex()
 
+    /** One lock per album: a hanging Immich call for one album must not hold up the others. */
+    private val loads = mutableMapOf<String, Mutex>()
+
     suspend fun albums() = source.albums()
 
-    suspend fun slideshow(albumId: String): List<SlideshowPhoto> = mutex.withLock {
-        val cached = albums[albumId]
-        if (cached != null && clock() - cached.first < ALBUM_TTL_MS) return cached.second
-        val photos = source.albumPhotos(albumId)
-        albums[albumId] = clock() to photos
-        photos
+    suspend fun slideshow(albumId: String): List<SlideshowPhoto> {
+        val load = mutex.withLock { loads.getOrPut(albumId) { Mutex() } }
+        return load.withLock {
+            val cached = mutex.withLock { albums[albumId] }
+            if (cached != null && clock() - cached.first < ALBUM_TTL_MS) return@withLock cached.second
+            val photos = try {
+                source.albumPhotos(albumId)
+            } catch (e: PhotoSourceException) {
+                cached ?: throw e
+                // keep showing what we have; ask Immich again in a little while
+                mutex.withLock { albums[albumId] = clock() - ALBUM_TTL_MS + RETRY_MS to cached.second }
+                return@withLock cached.second
+            }
+            mutex.withLock { albums[albumId] = clock() to photos }
+            photos
+        }
     }
 
     /** Adds a shared photo to the album and shows it on the next slideshow load. */
     suspend fun add(albumId: String, image: ByteArray, contentType: String, fileName: String) {
         source.addToAlbum(albumId, image, contentType, fileName)
-        mutex.withLock { albums.remove(albumId) }
+        mutex.withLock { albums[albumId]?.let { (_, photos) -> albums[albumId] = 0L to photos } }
     }
 
     suspend fun preview(albumId: String, assetId: String): ByteArray? {
-        if (slideshow(albumId).none { it.id == assetId }) return null
         // asset ids are UUIDs; anything else must never reach the file system
         if (!assetId.matches(Regex("[0-9a-fA-F-]{36}"))) return null
+        // a known asset needs no trip to Immich, so cached previews survive an outage
+        val known = mutex.withLock { albums[albumId] }?.second?.any { it.id == assetId } == true
+        if (!known && slideshow(albumId).none { it.id == assetId }) return null
         val file = File(previews, "$assetId.jpg")
         if (file.exists()) return withContext(Dispatchers.IO) { file.readBytes() }
         val bytes = source.preview(assetId)
         withContext(Dispatchers.IO) {
-            val partial = File(previews, "$assetId.part")
+            // a temp file of its own, so two first requests for one asset can't mix their writes
+            val partial = File.createTempFile(assetId, ".part", previews)
             partial.writeBytes(bytes)
-            partial.renameTo(file)
+            Files.move(partial.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
         return bytes
     }
 
     private companion object {
         const val ALBUM_TTL_MS = 5 * 60 * 1000L
+        const val RETRY_MS = 30_000L
     }
 }

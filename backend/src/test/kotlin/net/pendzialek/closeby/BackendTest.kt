@@ -21,14 +21,20 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import net.pendzialek.closeby.api.AppRelease
 import net.pendzialek.closeby.api.AuthResponse
 import net.pendzialek.closeby.api.CallJoin
 import net.pendzialek.closeby.api.DeviceKind
@@ -54,6 +60,7 @@ import net.pendzialek.closeby.api.PairingStartResponse
 import net.pendzialek.closeby.api.PairingState
 import net.pendzialek.closeby.api.PairingStatus
 import net.pendzialek.closeby.api.PersonAdmin
+import net.pendzialek.closeby.api.PersonUpdate
 import net.pendzialek.closeby.api.PushTokenRequest
 import net.pendzialek.closeby.api.RegisterRequest
 import net.pendzialek.closeby.api.Slideshow
@@ -61,6 +68,8 @@ import net.pendzialek.closeby.api.SlideshowPhoto
 import net.pendzialek.closeby.api.StartCallRequest
 import java.io.File
 import java.nio.file.Files
+import java.sql.DriverManager
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -77,34 +86,50 @@ class BackendTest {
         }
     }
 
+    /** Switches to IO like [FcmPush], so it fails the same way in a cancelled coroutine. */
     private class FakePush : Push {
-        val sent = mutableListOf<Pair<String, Map<String, String>>>()
+        val sent = CopyOnWriteArrayList<Pair<String, Map<String, String>>>()
         override suspend fun send(fcmToken: String, data: Map<String, String>): PushResult {
-            sent += fcmToken to data
+            withContext(Dispatchers.IO) { sent += fcmToken to data }
             return PushResult.SENT
         }
     }
 
     private class FakePhotos : PhotoSource {
         val added = mutableListOf<Pair<String, Int>>()
+        var down = false
+        var albumFetches = 0
         override suspend fun addToAlbum(albumId: String, image: ByteArray, contentType: String, fileName: String) {
             added += albumId to image.size
         }
         override suspend fun albums() = listOf(ImmichAlbum("album-1", "Familie", 2))
-        override suspend fun albumPhotos(albumId: String) = listOf(
-            SlideshowPhoto("11111111-1111-1111-1111-111111111111"),
-            SlideshowPhoto("22222222-2222-2222-2222-222222222222"),
-        )
-        override suspend fun preview(assetId: String) = byteArrayOf(1, 2, 3)
+        override suspend fun albumPhotos(albumId: String): List<SlideshowPhoto> {
+            albumFetches++
+            if (down) throw PhotoSourceException("down")
+            return listOf(
+                SlideshowPhoto("11111111-1111-1111-1111-111111111111"),
+                SlideshowPhoto("22222222-2222-2222-2222-222222222222"),
+            )
+        }
+        override suspend fun preview(assetId: String): ByteArray {
+            if (down) throw PhotoSourceException("down")
+            return byteArrayOf(1, 2, 3)
+        }
     }
 
     private val rooms = FakeRooms()
     private val push = FakePush()
     private val photos = FakePhotos()
 
-    private fun test(web: (File) -> Unit = {}, block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
+    private fun test(
+        web: (File) -> Unit = {},
+        apk: (File) -> Unit = {},
+        configure: Config.() -> Config = { this },
+        block: suspend ApplicationTestBuilder.(HttpClient) -> Unit,
+    ) = testApplication {
         val dir = Files.createTempDirectory("closeby-test").toFile()
         web(dir.resolve("web"))
+        apk(dir.resolve("apk"))
         val config = Config(
             databasePath = dir.resolve("test.db").path,
             adminCode = "admin-secret",
@@ -112,7 +137,7 @@ class BackendTest {
             apkDir = dir.resolve("apk").path,
             webDir = dir.resolve("web").path,
             staleCallGraceMs = 0,
-        )
+        ).configure()
         val services = Services.create(config, push = push, rooms = rooms, photoSource = photos)
         application { closeby(services) }
         val client = createClient {
@@ -127,6 +152,18 @@ class BackendTest {
             contentType(ContentType.Application.Json)
             setBody(RegisterRequest(code, adminCode, NewDevice(kind, "$name device"), NewPerson(name)))
         }
+
+    /** Pushes and timeouts run on the server's own (real-time) scope. */
+    private suspend fun <T> eventually(check: () -> T): T = withContext(Dispatchers.Default) {
+        withTimeout(5_000) {
+            var result = runCatching(check)
+            while (result.isFailure) {
+                delay(20)
+                result = runCatching(check)
+            }
+            result.getOrThrow()
+        }
+    }
 
     private suspend fun HttpClient.admin(): AuthResponse = register("Tobias", adminCode = "admin-secret").body()
 
@@ -235,7 +272,7 @@ class BackendTest {
                 setBody(StartCallRequest(personId = admin.personId))
             }.body()
             assertEquals("token:${join.callId}:${frame.deviceId}", join.token)
-            val incoming = push.sent.single()
+            val incoming = eventually { push.sent.single() }
             assertEquals("fcm-phone", incoming.first)
             assertEquals(EventTypes.CALL_INCOMING, incoming.second["type"])
             assertEquals("Wohnzimmer Oma", incoming.second["fromName"])
@@ -473,7 +510,7 @@ class BackendTest {
             contentType(ContentType.Application.Json)
             setBody(StartCallRequest(personId = admin.personId))
         }
-        assertEquals(version.toString(), push.sent.single().second["fromAvatarVersion"])
+        assertEquals(version.toString(), eventually { push.sent.single() }.second["fromAvatarVersion"])
     }
 
     @Test
@@ -538,6 +575,211 @@ class BackendTest {
         assertEquals(HttpStatusCode.OK, fallback.status)
         assertEquals("no-cache", fallback.headers[HttpHeaders.CacheControl])
         assertEquals("max-age=31536000", client.get("/assets/index-abc123.js").headers[HttpHeaders.CacheControl])
+    }
+
+
+    @Test
+    fun `an unanswered call ends as missed, pushes that and closes the room`() = test(configure = { copy(ringTimeoutSeconds = 1) }) { client ->
+        val admin = client.admin()
+        client.put("/api/me/push") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(PushTokenRequest("fcm-phone"))
+        }
+        val frame = client.pairFrame(admin)
+        val join: CallJoin = client.post("/api/calls") {
+            bearerAuth(frame.token)
+            contentType(ContentType.Application.Json)
+            setBody(StartCallRequest(personId = admin.personId))
+        }.body()
+
+        val ended = eventually { push.sent.single { it.second["type"] == EventTypes.CALL_ENDED } }
+        assertEquals(join.callId, ended.second["callId"])
+        assertEquals("missed", ended.second["reason"])
+        eventually { assertEquals(listOf(join.callId), rooms.closed) }
+    }
+
+    @Test
+    fun `migrations survive a rollback to an older image`() {
+        val path = Files.createTempDirectory("closeby-db").resolve("test.db").toString()
+        Db(path).close()
+        fun version() = DriverManager.getConnection("jdbc:sqlite:$path").use { c ->
+            c.createStatement().use { it.executeQuery("PRAGMA user_version").use { rs -> rs.getInt(1) } }
+        }
+        fun sql(vararg statements: String) = DriverManager.getConnection("jdbc:sqlite:$path").use { c ->
+            c.createStatement().use { s -> statements.forEach(s::execute) }
+        }
+        val latest = version()
+
+        // an image from before the frame avatars set the version back, the next one migrates again
+        sql("PRAGMA user_version = 1")
+        Db(path).close()
+        assertEquals(latest, version())
+
+        // a real version-1 database still gets the columns
+        sql(
+            "ALTER TABLE frames DROP COLUMN avatar",
+            "ALTER TABLE frames DROP COLUMN avatar_type",
+            "ALTER TABLE frames DROP COLUMN avatar_version",
+            "PRAGMA user_version = 1",
+        )
+        Db(path).close()
+        sql("SELECT avatar, avatar_type, avatar_version FROM frames")
+
+        // an older image never lowers the version
+        sql("PRAGMA user_version = ${latest + 3}")
+        Db(path).close()
+        assertEquals(latest + 3, version())
+    }
+
+    @Test
+    fun `oversized bodies are refused before they are read`() = test { client ->
+        val pairing = client.post("/api/pairing/start") {
+            contentType(ContentType.Application.Json)
+            setBody("{\"kind\":\"frame\",\"name\":\"${"x".repeat(200_000)}\"}")
+        }
+        assertEquals(HttpStatusCode.PayloadTooLarge, pairing.status)
+        val admin = client.admin()
+        val avatar = client.put("/api/me/avatar") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Image.JPEG)
+            setBody(ByteArray(3 * 1024 * 1024))
+        }
+        assertEquals(HttpStatusCode.PayloadTooLarge, avatar.status)
+    }
+
+    @Test
+    fun `only an unknown token closes the websocket as revoked`() = test { client ->
+        suspend fun closeCode(first: String): Short? {
+            var code: Short? = null
+            client.webSocket("/api/ws") {
+                send(first)
+                // the server closes right after the first message
+                incoming.receiveCatching()
+                code = closeReason.await()?.code
+            }
+            return code
+        }
+        assertEquals(4408.toShort(), closeCode("not json"))
+        val unknown = apiJson.encodeToString(Event.serializer(), Event(EventTypes.AUTH, token = "nope"))
+        assertEquals(CloseReason.Codes.VIOLATED_POLICY.code, closeCode(unknown))
+    }
+
+    @Test
+    fun `a code of another kind is refused and burnt`() = test { client ->
+        val admin = client.admin()
+        val start: PairingStartResponse = client.post("/api/pairing/start") {
+            contentType(ContentType.Application.Json)
+            setBody(PairingStartRequest(DeviceKind.DESKTOP, "Mallory PC"))
+        }.body()
+        suspend fun claim() = client.post("/api/pairing/claim") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(PairingClaimRequest(start.code, expectedKind = DeviceKind.FRAME))
+        }
+        assertEquals(HttpStatusCode.Conflict, claim().status)
+        assertEquals(HttpStatusCode.NotFound, claim().status)
+    }
+
+    @Test
+    fun `frame settings outside the limits are refused`() = test { client ->
+        val admin = client.admin()
+        val frame = client.pairFrame(admin)
+        suspend fun save(settings: FrameSettings) = client.put("/api/admin/frames/${frame.deviceId}") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(FrameUpdate("Wohnzimmer", settings = settings))
+        }.status
+        assertEquals(HttpStatusCode.BadRequest, save(FrameSettings(slideshowIntervalSeconds = 0)))
+        assertEquals(HttpStatusCode.BadRequest, save(FrameSettings(volume = 150)))
+        assertEquals(HttpStatusCode.BadRequest, save(FrameSettings(nightStart = "22:00")))
+        assertEquals(HttpStatusCode.BadRequest, save(FrameSettings(nightStart = "late", nightEnd = "07:00")))
+        assertEquals(HttpStatusCode.NoContent, save(FrameSettings(nightStart = "22:00", nightEnd = "07:00", volume = 80)))
+    }
+
+    @Test
+    fun `the last admin stays an admin`() = test { client ->
+        val admin = client.admin()
+        val demote = client.put("/api/admin/persons/${admin.personId}") {
+            bearerAuth(admin.token)
+            contentType(ContentType.Application.Json)
+            setBody(PersonUpdate(isAdmin = false))
+        }
+        assertEquals(HttpStatusCode.BadRequest, demote.status)
+        assertEquals(HttpStatusCode.BadRequest, client.delete("/api/admin/persons/${admin.personId}") { bearerAuth(admin.token) }.status)
+        val me: Me = client.get("/api/me") { bearerAuth(admin.token) }.body()
+        assertEquals(true, me.person?.isAdmin)
+    }
+
+    @Test
+    fun `removing a frame tells the others it is offline`() = test { client ->
+        val admin = client.admin()
+        val frame = client.pairFrame(admin)
+        val offline = CompletableDeferred<Event>()
+        val frameOnline = CompletableDeferred<Unit>()
+        coroutineScope {
+            val adminSocket = launch {
+                client.webSocket("/api/ws") {
+                    send(apiJson.encodeToString(Event.serializer(), Event(EventTypes.AUTH, token = admin.token)))
+                    for (message in incoming) {
+                        val event = apiJson.decodeFromString(Event.serializer(), (message as Frame.Text).readText())
+                        if (event.type == EventTypes.PRESENCE_CHANGED && event.deviceId == frame.deviceId) {
+                            if (event.online == true) frameOnline.complete(Unit) else offline.complete(event)
+                        }
+                    }
+                }
+            }
+            val frameSocket = launchListener(client, frame.token, CompletableDeferred(), CompletableDeferred())
+            withTimeout(5_000) { frameOnline.await() }
+            client.delete("/api/admin/devices/${frame.deviceId}") { bearerAuth(admin.token) }
+            assertEquals(false, withTimeout(5_000) { offline.await() }.online)
+            frameSocket.cancel()
+            adminSocket.cancel()
+        }
+    }
+
+    @Test
+    fun `each release has its own uncached download`() = test(apk = { dir ->
+        dir.mkdirs()
+        dir.resolve("closeby.apk").writeBytes(byteArrayOf(7, 7, 7))
+        dir.resolve("version.json").writeText("""{"versionCode":6101,"versionName":"0.1.61","sha256":"abc"}""")
+    }) { client ->
+        val latest = client.get("/api/app/android")
+        assertEquals("no-cache", latest.headers[HttpHeaders.CacheControl])
+        val release: AppRelease = latest.body()
+        assertTrue(release.url.endsWith("/api/app/android/closeby.apk?v=6101"))
+        val download = client.get("/api/app/android/closeby.apk?v=6101")
+        assertEquals("no-store", download.headers[HttpHeaders.CacheControl])
+        assertEquals(listOf<Byte>(7, 7, 7), download.body<ByteArray>().toList())
+    }
+
+    @Test
+    fun `unknown api paths are a 404, not the web page`() = test(web = { dir ->
+        dir.mkdirs()
+        dir.resolve("index.html").writeText("<!doctype html>")
+    }) { client ->
+        assertEquals(HttpStatusCode.NotFound, client.get("/api/calls").status)
+        assertEquals(HttpStatusCode.OK, client.get("/rahmen").status)
+    }
+
+    @Test
+    fun `photos keep coming from the cache while Immich is down`() = runBlocking {
+        var now = 0L
+        val source = FakePhotos()
+        val service = PhotoService(source, Files.createTempDirectory("closeby-cache").toString()) { now }
+        val asset = "11111111-1111-1111-1111-111111111111"
+        assertEquals(2, service.slideshow("album-1").size)
+        assertEquals(listOf<Byte>(1, 2, 3), service.preview("album-1", asset)?.toList())
+
+        source.down = true
+        now += 60 * 60 * 1000L
+        assertEquals(2, service.slideshow("album-1").size)
+        assertEquals(listOf<Byte>(1, 2, 3), service.preview("album-1", asset)?.toList())
+        // no hammering: the next attempt waits a little
+        val fetches = source.albumFetches
+        service.slideshow("album-1")
+        assertEquals(fetches, source.albumFetches)
+        assertNull(service.preview("album-1", "../../etc/passwd"))
     }
 
     private fun CoroutineScope.launchListener(

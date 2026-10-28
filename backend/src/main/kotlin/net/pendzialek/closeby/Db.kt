@@ -2,6 +2,7 @@ package net.pendzialek.closeby
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.ResultSet
@@ -15,11 +16,11 @@ class Db(path: String) : AutoCloseable {
     private val lock = Any()
 
     init {
-        connection.createStatement().use {
-            it.execute("PRAGMA journal_mode=WAL")
-            it.execute("PRAGMA foreign_keys=ON")
-        }
+        connection.createStatement().use { it.execute("PRAGMA journal_mode=WAL") }
         migrate()
+        // only now: with foreign keys on, a migration that rebuilds a table (DROP TABLE)
+        // would cascade into every device and contact
+        connection.createStatement().use { it.execute("PRAGMA foreign_keys=ON") }
     }
 
     suspend fun <T> tx(block: Tx.() -> T): T = withContext(Dispatchers.IO) { txBlocking(block) }
@@ -38,17 +39,45 @@ class Db(path: String) : AutoCloseable {
 
     private fun migrate() = txBlocking {
         val current = one("PRAGMA user_version") { it.getInt(1) } ?: 0
+        if (current > MIGRATIONS.size) {
+            // an older image after a rollback; never lower the version, or the next
+            // newer image would run the missing migrations a second time
+            LoggerFactory.getLogger(Db::class.java).warn("database is at version {}, this build knows {}", current, MIGRATIONS.size)
+            return@txBlocking
+        }
         MIGRATIONS.drop(current).forEach { script ->
-            script.split(";").map { it.trim() }.filter { it.isNotEmpty() }.forEach { exec(it) }
+            script.split(";").map { it.trim() }.filter { it.isNotEmpty() && !applied(it) }.forEach { exec(it) }
         }
         // PRAGMA does not take bind parameters
         connection.createStatement().use { it.execute("PRAGMA user_version = ${MIGRATIONS.size}") }
     }
 
+    /**
+     * Older images lowered user_version on a rollback, so a migration may run on a
+     * schema that already has it. Tables and columns that exist are skipped.
+     */
+    private fun Tx.applied(statement: String): Boolean {
+        CREATE_TABLE.find(statement)?.let { match ->
+            return one("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", match.groupValues[1]) { true } != null
+        }
+        ADD_COLUMN.find(statement)?.let { match ->
+            val (table, column) = match.destructured
+            return query("PRAGMA table_info($table)") { it.getString("name") }.any { it.equals(column, ignoreCase = true) }
+        }
+        return false
+    }
+
     override fun close() = connection.close()
 
     companion object {
-        /** Append only; each entry runs once, tracked by PRAGMA user_version. */
+        private val CREATE_TABLE = Regex("""^CREATE\s+TABLE\s+(\w+)""", RegexOption.IGNORE_CASE)
+        private val ADD_COLUMN = Regex("""^ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)""", RegexOption.IGNORE_CASE)
+
+        /**
+         * Append only; each entry runs once, tracked by PRAGMA user_version. Stick to
+         * CREATE TABLE and ALTER TABLE ... ADD COLUMN where possible: those are skipped
+         * when they already exist (see [applied]); anything else must be safe to repeat.
+         */
         private val MIGRATIONS = listOf(
             """
             CREATE TABLE persons (

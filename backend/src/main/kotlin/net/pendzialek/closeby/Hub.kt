@@ -6,6 +6,7 @@ import io.ktor.websocket.close
 import io.ktor.websocket.WebSocketSession
 import kotlinx.serialization.json.Json
 import net.pendzialek.closeby.api.Event
+import net.pendzialek.closeby.api.EventTypes
 import java.util.concurrent.ConcurrentHashMap
 
 /** Open websocket sessions per device. A device may hold several (e.g. two browser tabs). */
@@ -41,9 +42,12 @@ class Hub {
 
     /** Closes every session of a revoked device. */
     suspend fun disconnect(deviceId: String) {
-        sessions.remove(deviceId)?.forEach { session ->
+        val closed = sessions.remove(deviceId) ?: return
+        closed.forEach { session ->
             runCatching { session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "revoked")) }
         }
+        // the sessions' own cleanup finds nothing left to remove, so announce it here
+        broadcast(Event(EventTypes.PRESENCE_CHANGED, deviceId = deviceId, online = false))
     }
 
     fun isOnline(deviceId: String) = sessions[deviceId]?.isNotEmpty() == true
