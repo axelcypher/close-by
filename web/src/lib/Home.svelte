@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { session } from "../session.svelte";
+  import { reloadIfOutdated, session } from "../session.svelte";
   import Avatar from "./Avatar.svelte";
   import CallFrames from "./CallFrames.svelte";
   import FramesAdmin from "./FramesAdmin.svelte";
@@ -39,6 +39,12 @@
   </header>
 
   <main>
+    {#if session.updateReady}
+      <div class="card row update">
+        <span>Eine neue Version von CloseBy ist da.</span>
+        <button onclick={() => reloadIfOutdated(true)}>Jetzt neu laden</button>
+      </div>
+    {/if}
     {#if tab === "call"}
       <CallFrames />
     {:else if tab === "frames"}
@@ -95,5 +101,9 @@
     max-width: 60rem;
     margin: 0 auto;
     padding: 1.5rem 1.2rem 3rem;
+  }
+  .update {
+    justify-content: space-between;
+    margin-bottom: 1rem;
   }
 </style>

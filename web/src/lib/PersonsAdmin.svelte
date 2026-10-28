@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type DeviceInfo, type InviteResponse, type PersonAdmin } from "../api";
-  import { session } from "../session.svelte";
+  import { loadMe, session } from "../session.svelte";
   import AvatarPicker from "./AvatarPicker.svelte";
   import Qr from "./Qr.svelte";
 
@@ -10,7 +10,11 @@
   let confirmDelete = $state<string | null>(null);
 
   async function load() {
-    persons = await api.admin.persons();
+    try {
+      persons = await api.admin.persons();
+    } catch (e) {
+      error = (e as Error).message;
+    }
   }
 
   $effect(() => {
@@ -19,13 +23,20 @@
   });
 
   async function createInvite() {
-    invite = await api.admin.invite();
+    error = "";
+    try {
+      invite = await api.admin.invite();
+    } catch (e) {
+      error = (e as Error).message;
+    }
   }
 
   async function run(action: () => Promise<void>) {
     error = "";
     try {
       await action();
+      // this admin may have just taken their own admin rights away
+      await loadMe();
       await load();
       session.revision++;
     } catch (e) {
