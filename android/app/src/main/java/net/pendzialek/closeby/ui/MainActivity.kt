@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             CloseByTheme {
                 val mode by app.mode.collectAsState()
+                val frameController by app.frameControllers.collectAsState()
                 val maintenanceUntil by app.maintenanceUntil.collectAsState()
                 LaunchedEffect(mode) { applyWindowMode(mode) }
                 LaunchedEffect(mode) {
@@ -74,7 +75,7 @@ class MainActivity : ComponentActivity() {
                 }
                 when (mode) {
                     null -> SetupScreen()
-                    AppMode.FRAME -> app.frameController?.let { FrameScreen(it) }
+                    AppMode.FRAME -> frameController?.let { FrameScreen(it) }
                     AppMode.CONTACT -> app.contactController?.let { ContactScreen(it) }
                 }
             }

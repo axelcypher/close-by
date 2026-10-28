@@ -129,8 +129,10 @@ must not roll back migrations or APKs). `GET /api/app/android` returns the
 latest version, with a download URL per version; frames running as device owner
 install it silently. No update replaces the app during a call. A frame that
 restarts within three minutes of its last start (perhaps a crashing release)
-looks for an update after 5 s instead of 60 s, so a fix can arrive without
-anybody on site. On
+looks for a newer release before its frame logic and screen start (at most
+15 s, plus the download if there is one), so a fix can arrive without anybody
+on site. The certificate check uses the repository variable
+`ANDROID_CERT_SHA256` when set, else what production publishes. On
 Android 12+ a self-update needs no confirmation either once CloseBy may install
 apps (`UPDATE_PACKAGES_WITHOUT_USER_ACTION`): phones check every six hours on
 Wi-Fi while the app is closed (`UpdateJob`), and the contact screen offers a

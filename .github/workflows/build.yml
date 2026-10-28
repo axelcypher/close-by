@@ -51,7 +51,9 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # Monotonically increasing, so installed apps accept the update. A re-run builds a
-      # different APK (secrets may have changed), so it needs a code of its own.
+      # different APK (secrets may have changed), so it needs a code of its own; it is pushed
+      # under the same image tag, so production only picks it up when it pulls that tag again
+      # (the GitOps file doesn't change). To roll something out, push a commit.
       - name: Number the release
         run: |
           code=$(( GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT ))
@@ -91,6 +93,9 @@ jobs:
       # versionCode; anything else would be fetched every six hours and fail silently.
       - name: Check release against production
         if: github.event_name != 'pull_request'
+        env:
+          # optional repository variable; without it, the certificate production publishes counts
+          PINNED_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
         run: |
           apk=android/app/build/outputs/apk/release/app-release.apk
           test -f "$apk" || { echo "::error::no signed APK (unsigned builds are app-release-unsigned.apk)"; exit 1; }
@@ -99,17 +104,20 @@ jobs:
           test -n "$signed" || { echo "::error::APK signature does not verify"; exit 1; }
 
           # production publishes its signing certificate for App Links
-          if links=$(curl -fsS --max-time 20 "$PUBLIC_URL/.well-known/assetlinks.json"); then
-            expected=$(echo "$links" | jq -r '.[0].target.sha256_cert_fingerprints[0]' | tr -d ':' | tr 'A-F' 'a-f')
-            if [ "$signed" != "$expected" ]; then
-              echo "::error::APK is signed with $signed, production expects $expected (ANDROID_CERT_SHA256); installed apps would refuse it"
-              exit 1
-            fi
-          else
-            echo "::warning::production unreachable, signing certificate not compared"
+          expected="$PINNED_CERT_SHA256"
+          if [ -z "$expected" ]; then
+            expected=$(curl -fsS --max-time 20 "$PUBLIC_URL/.well-known/assetlinks.json" \
+              | jq -r '.[0].target.sha256_cert_fingerprints[0] // empty' 2>/dev/null || true)
+          fi
+          expected=$(echo "$expected" | tr -d ':' | tr 'A-F' 'a-f')
+          if [ -z "$expected" ]; then
+            echo "::warning::no expected certificate (production unreachable, no ANDROID_CERT_SHA256 variable), not compared"
+          elif [ "$signed" != "$expected" ]; then
+            echo "::error::APK is signed with $signed, expected $expected (repository variable ANDROID_CERT_SHA256, else production's assetlinks); installed apps would refuse it"
+            exit 1
           fi
 
-          live=$(curl -fsS --max-time 20 "$PUBLIC_URL/api/app/android" | jq -r '.versionCode // empty' || true)
+          live=$(curl -fsS --max-time 20 "$PUBLIC_URL/api/app/android" | jq -r '.versionCode // empty' 2>/dev/null || true)
           if [ -z "$live" ]; then
             echo "::warning::no published release found, versionCode not compared"
           elif [ "$CLOSEBY_VERSION_CODE" -le "$live" ]; then

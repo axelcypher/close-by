@@ -11,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import net.pendzialek.closeby.api.FrameCommands
 import net.pendzialek.closeby.call.CallSession
 import net.pendzialek.closeby.call.CallUi
@@ -45,9 +46,13 @@ class CloseByApp : Application() {
     lateinit var updater: Updater
         private set
 
-    /** Null unless paired as frame. */
-    var frameController: FrameController? = null
-        private set
+    private val _frameController = MutableStateFlow<FrameController?>(null)
+
+    /** Null unless paired as frame (and, after a quick restart, until the rescue check is done). */
+    val frameController: FrameController? get() = _frameController.value
+
+    /** Observable [frameController]: the frame screen appears once the controller exists. */
+    val frameControllers: StateFlow<FrameController?> = _frameController
 
     /** Null unless paired as a relative's phone. */
     var contactController: ContactController? = null
@@ -104,27 +109,44 @@ class CloseByApp : Application() {
         UpdateJob.schedule(this)
     }
 
-    /** Starts the frame logic once; the service and the activity both call this. */
+    private var rescue: Job? = null
+
+    /**
+     * Starts the frame logic once; the service and the activity both call this.
+     *
+     * Right after a short-lived run (perhaps this release crashes at start, in the frame logic
+     * or its screen) nothing of that runs before a look for a newer release: a broken release
+     * is replaced by the next one without anybody on site. Without one, the frame starts after
+     * at most a few seconds.
+     */
     fun ensureFrameRunning(mode: AppMode? = _mode.value) {
-        if (mode != AppMode.FRAME || frameController != null) return
-        // first, so a release that crashes in the frame logic (later than a few seconds after start) can still be replaced
+        if (mode != AppMode.FRAME || frameController != null || rescue?.isActive == true) return
+        if (!restartedQuickly) return startFrame()
+        rescue = scope.launch {
+            val release = withTimeoutOrNull(RESCUE_CHECK_MS) { updater.newerRelease() }
+            if (release != null && updater.canInstallSilently()) {
+                // on success the process ends here and the new version starts
+                Log.i("CloseBy", "update after a quick restart: ${updater.install(release)}")
+            }
+            restartedQuickly = false
+            startFrame()
+        }
+    }
+
+    private fun startFrame() {
         startUpdateLoop()
-        frameController = FrameController(this).apply {
+        _frameController.value = FrameController(this).apply {
             onIncomingWhileHidden = { name -> FrameService.showIncoming(this@CloseByApp, name) }
             onCommand = ::onFrameCommand
             start()
         }
     }
 
-    /**
-     * Frames update themselves every six hours, but never during a call. Right after a
-     * short-lived run (perhaps a crash) they look first, so a broken release can be fixed
-     * by the next one without anybody on site.
-     */
+    /** Frames update themselves every six hours, but never during a call. */
     private fun startUpdateLoop() {
         updateJob?.cancel()
         updateJob = scope.launch {
-            delay(if (restartedQuickly) 5_000 else 60_000)
+            delay(60_000)
             while (true) {
                 var retrySoon = inCall()
                 // an update that needs a tap waits for an admin's request
@@ -219,6 +241,8 @@ class CloseByApp : Application() {
     private companion object {
         const val MAINTENANCE_MS = 10 * 60_000L
         const val QUICK_RESTART_MS = 3 * 60_000L
+        /** How long a restarted frame waits for the release check (not the download) before it starts anyway. */
+        const val RESCUE_CHECK_MS = 15_000L
     }
 
     fun paired(mode: AppMode, token: String, deviceId: String) {
@@ -235,9 +259,10 @@ class CloseByApp : Application() {
 
     fun signOut() {
         revocationCheck?.cancel()
+        rescue?.cancel()
         updateJob?.cancel()
         frameController?.stop()
-        frameController = null
+        _frameController.value = null
         contactController?.stop()
         contactController = null
         UpdateJob.cancel(this)

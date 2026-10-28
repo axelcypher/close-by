@@ -64,8 +64,9 @@ class Updater(private val context: Context, private val api: Api) {
         if (ready != null) return@withLock ready
         try {
             if (!mayInstall()) return@withLock POSTPONED
-            withContext(Dispatchers.IO) { commit() }
-            "installing ${release.versionName}"
+            // copying 50 MB into the session takes a moment, so ask once more right before the switch
+            val committed = withContext(Dispatchers.IO) { commit(mayInstall) }
+            if (committed) "installing ${release.versionName}" else POSTPONED
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -108,7 +109,8 @@ class Updater(private val context: Context, private val api: Api) {
         return api.request(url.encodedPath + (url.encodedQuery?.let { "?$it" } ?: "")).build().url.toString()
     }
 
-    private fun commit() {
+    /** False if [mayInstall] said no after the copy; the session is dropped then. */
+    private fun commit(mayInstall: () -> Boolean): Boolean {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
@@ -122,6 +124,10 @@ class Updater(private val context: Context, private val api: Api) {
                     apk.inputStream().use { it.copyTo(out) }
                     session.fsync(out)
                 }
+                if (!mayInstall()) {
+                    session.abandon()
+                    return false
+                }
                 val intent = Intent(context, InstallResultReceiver::class.java)
                 val pending = PendingIntent.getBroadcast(
                     context, sessionId, intent,
@@ -129,6 +135,7 @@ class Updater(private val context: Context, private val api: Api) {
                 )
                 session.commit(pending.intentSender)
             }
+            return true
         } catch (e: Exception) {
             // a session left open would hold the copied APK until the next reboot
             runCatching { installer.abandonSession(sessionId) }
