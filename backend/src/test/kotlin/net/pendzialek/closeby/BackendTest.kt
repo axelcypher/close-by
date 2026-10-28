@@ -717,18 +717,22 @@ class BackendTest {
         val frame = client.pairFrame(admin)
         val offline = CompletableDeferred<Event>()
         val frameOnline = CompletableDeferred<Unit>()
+        val adminReady = CompletableDeferred<Unit>()
         coroutineScope {
             val adminSocket = launch {
                 client.webSocket("/api/ws") {
                     send(apiJson.encodeToString(Event.serializer(), Event(EventTypes.AUTH, token = admin.token)))
                     for (message in incoming) {
                         val event = apiJson.decodeFromString(Event.serializer(), (message as Frame.Text).readText())
+                        if (event.type == EventTypes.READY) adminReady.complete(Unit)
                         if (event.type == EventTypes.PRESENCE_CHANGED && event.deviceId == frame.deviceId) {
                             if (event.online == true) frameOnline.complete(Unit) else offline.complete(event)
                         }
                     }
                 }
             }
+            // the frame's "online" goes only to sessions that exist already
+            withTimeout(5_000) { adminReady.await() }
             val frameSocket = launchListener(client, frame.token, CompletableDeferred(), CompletableDeferred())
             withTimeout(5_000) { frameOnline.await() }
             client.delete("/api/admin/devices/${frame.deviceId}") { bearerAuth(admin.token) }

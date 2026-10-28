@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.pendzialek.closeby.api.CallJoin
@@ -65,7 +66,9 @@ class Calls(
         scope.launch {
             for ((token, data) in pushes) {
                 try {
-                    if (push.send(token, data) == PushResult.UNREGISTERED) store.clearFcmToken(token)
+                    // one stalled send must not hold up the rings queued behind it
+                    val result = withTimeoutOrNull(PUSH_TIMEOUT_MS) { push.send(token, data) }
+                    if (result == PushResult.UNREGISTERED) store.clearFcmToken(token)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -240,6 +243,7 @@ class Calls(
 }
 
 private const val STALE_CHECK_MS = 30_000L
+private const val PUSH_TIMEOUT_MS = 10_000L
 
 fun notFound(): Nothing = throw ApiException(HttpStatusCode.NotFound, "not found")
 fun badRequest(message: String): Nothing = throw ApiException(HttpStatusCode.BadRequest, message)

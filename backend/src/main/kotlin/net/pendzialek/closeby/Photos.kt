@@ -240,8 +240,12 @@ class PhotoService(
         withContext(Dispatchers.IO) {
             // a temp file of its own, so two first requests for one asset can't mix their writes
             val partial = File.createTempFile(assetId, ".part", previews)
-            partial.writeBytes(bytes)
-            Files.move(partial.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            try {
+                partial.writeBytes(bytes)
+                Files.move(partial.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } finally {
+                partial.delete() // only left when the move failed, e.g. disk full
+            }
         }
         return bytes
     }
