@@ -89,8 +89,8 @@ class PairingViewModel(application: Application) : AndroidViewModel(application)
                 val status = try {
                     app.api.pollPairing(pairing.pairingId, pairing.pollSecret)
                 } catch (e: ApiException) {
-                    // the code is gone (e.g. refused as the wrong kind of device): show a fresh one
-                    if (e.status == 404) return@launch startFrame(server)
+                    // the code is gone long before it expires (refused as the wrong kind of device): show a fresh one
+                    if (e.status == 404 && System.currentTimeMillis() < pairing.expiresAt - 60_000) return@launch startFrame(server)
                     continue
                 } catch (_: Exception) {
                     continue

@@ -68,6 +68,10 @@
     // edits made while the requests run mark the editor dirty again and survive the reload
     const sendSettings = settingsDirty;
     const sendContacts = contactsDirty;
+    // built now: a reload while the first request runs replaces the local lists
+    // keep persons added on the server since editing began, drop persons that no longer exist
+    const added = frame.contacts.filter((c) => !baseContacts.includes(c.personId) && !contacts.some((own) => own.personId === c.personId));
+    const nextContacts = $state.snapshot([...contacts, ...added].filter((c) => personById.has(c.personId)));
     settingsDirty = false;
     contactsDirty = false;
     try {
@@ -82,12 +86,7 @@
           },
         });
       }
-      if (sendContacts) {
-        // keep persons added on the server since editing began, drop persons that no longer exist
-        const added = frame.contacts.filter((c) => !baseContacts.includes(c.personId) && !contacts.some((own) => own.personId === c.personId));
-        const next = [...contacts, ...added].filter((c) => personById.has(c.personId));
-        await api.admin.setFrameContacts(frame.device.id, next);
-      }
+      if (sendContacts) await api.admin.setFrameContacts(frame.device.id, nextContacts);
       saved = "Gespeichert, der Rahmen übernimmt es sofort.";
       setTimeout(() => (saved = ""), 3000);
       onChanged();

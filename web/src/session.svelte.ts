@@ -219,11 +219,15 @@ async function checkForNewBuild() {
   }
 }
 
-/** Reloads into the new build, but not during a call and not under someone's hands. */
+/**
+ * Reloads into the new build, but not during a call and not under someone's hands, and only
+ * while the server answers: the Windows app never retries a page that failed to load.
+ */
 export async function reloadIfOutdated(force = false) {
-  if (!session.updateReady || call.state.phase !== "idle") return;
+  if (!session.updateReady || call.state.phase !== "idle" || !session.connected) return;
   if (!force && !(await unwatched())) return;
-  if (call.state.phase === "idle") location.reload();
+  const reachable = await fetch("/", { method: "HEAD", cache: "no-store" }).then((r) => r.ok, () => false);
+  if (reachable && session.connected && call.state.phase === "idle") location.reload();
 }
 
 /** Nobody looks: a background tab, or the Windows app's window sits in the tray. */

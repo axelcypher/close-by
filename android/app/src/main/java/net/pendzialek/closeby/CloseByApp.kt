@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -117,13 +118,15 @@ class CloseByApp : Application() {
      * Right after a short-lived run (perhaps this release crashes at start, in the frame logic
      * or its screen) nothing of that runs before a look for a newer release: a broken release
      * is replaced by the next one without anybody on site. Without one, the frame starts after
-     * at most a few seconds.
+     * at most 15 s (plus the download when there is one).
      */
     fun ensureFrameRunning(mode: AppMode? = _mode.value) {
         if (mode != AppMode.FRAME || frameController != null || rescue?.isActive == true) return
         if (!restartedQuickly) return startFrame()
         rescue = scope.launch {
-            val release = withTimeoutOrNull(RESCUE_CHECK_MS) { updater.newerRelease() }
+            // a check of its own, so the timeout holds even while OkHttp blocks on a bad network
+            val check = scope.async { updater.newerRelease() }
+            val release = withTimeoutOrNull(RESCUE_CHECK_MS) { check.await() }
             if (release != null && updater.canInstallSilently()) {
                 // on success the process ends here and the new version starts
                 Log.i("CloseBy", "update after a quick restart: ${updater.install(release)}")
