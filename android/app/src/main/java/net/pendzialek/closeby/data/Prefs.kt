@@ -31,6 +31,11 @@ class Prefs(context: Context) {
         get() = prefs.getBoolean("forcePublicDns", true)
         set(value) = prefs.edit { putBoolean("forcePublicDns", value) }
 
+    /** When the process last started; written at once, a crashing app may not get another chance. */
+    var lastStartAt: Long
+        get() = prefs.getLong("lastStartAt", 0)
+        set(value) = prefs.edit(commit = true) { putLong("lastStartAt", value) }
+
     fun signOut() = prefs.edit {
         remove("token")
         remove("deviceId")

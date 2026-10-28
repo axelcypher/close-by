@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { session } from "../session.svelte";
+  import { reloadIfOutdated, session } from "../session.svelte";
   import Avatar from "./Avatar.svelte";
   import CallFrames from "./CallFrames.svelte";
   import FramesAdmin from "./FramesAdmin.svelte";
@@ -16,6 +16,8 @@
     ...(isAdmin ? ([["frames", "Rahmen"], ["persons", "Personen"]] as [Tab, string][]) : []),
     ["profile", "Profil"],
   ]);
+  // e.g. an admin who just gave up their admin rights
+  const current = $derived(tabs.some(([id]) => id === tab) ? tab : "call");
 </script>
 
 <div class="layout">
@@ -26,7 +28,7 @@
     </div>
     <nav>
       {#each tabs as [id, label] (id)}
-        <button class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
+        <button class:active={current === id} onclick={() => (tab = id)}>{label}</button>
       {/each}
     </nav>
     <div class="me">
@@ -39,11 +41,17 @@
   </header>
 
   <main>
-    {#if tab === "call"}
+    {#if session.updateReady}
+      <div class="card row update">
+        <span>Eine neue Version von CloseBy ist da.</span>
+        <button onclick={() => reloadIfOutdated(true)}>Jetzt neu laden</button>
+      </div>
+    {/if}
+    {#if current === "call"}
       <CallFrames />
-    {:else if tab === "frames"}
+    {:else if current === "frames"}
       <FramesAdmin />
-    {:else if tab === "persons"}
+    {:else if current === "persons"}
       <PersonsAdmin />
     {:else}
       <Profile />
@@ -95,5 +103,9 @@
     max-width: 60rem;
     margin: 0 auto;
     padding: 1.5rem 1.2rem 3rem;
+  }
+  .update {
+    justify-content: space-between;
+    margin-bottom: 1rem;
   }
 </style>

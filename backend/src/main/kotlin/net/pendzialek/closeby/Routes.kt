@@ -2,6 +2,7 @@ package net.pendzialek.closeby
 
 import io.ktor.http.CacheControl
 import io.ktor.http.ContentType
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
@@ -9,6 +10,7 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.request.contentType
+import io.ktor.server.request.path
 import io.ktor.server.request.receive
 import io.ktor.server.response.cacheControl
 import io.ktor.server.response.respond
@@ -38,6 +40,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import net.pendzialek.closeby.api.ApiError
 import net.pendzialek.closeby.api.AuthResponse
 import net.pendzialek.closeby.api.DeviceInfo
 import net.pendzialek.closeby.api.DeviceKind
@@ -51,6 +54,7 @@ import net.pendzialek.closeby.api.FrameConfig
 import net.pendzialek.closeby.api.FrameContact
 import net.pendzialek.closeby.api.FrameContactEntry
 import net.pendzialek.closeby.api.FrameRef
+import net.pendzialek.closeby.api.FrameSettings
 import net.pendzialek.closeby.api.FrameUpdate
 import net.pendzialek.closeby.api.InviteResponse
 import net.pendzialek.closeby.api.Me
@@ -70,6 +74,7 @@ import net.pendzialek.closeby.api.StartCallRequest
 import net.pendzialek.closeby.api.StatusReport
 import net.pendzialek.closeby.api.UpdateMeRequest
 import java.io.File
+import java.time.LocalTime
 import kotlin.time.Duration.Companion.seconds
 
 const val DEVICE_AUTH = "device"
@@ -78,7 +83,22 @@ private const val PAIRING_TTL_MS = 10 * 60 * 1000L
 private const val INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000L
 private const val MAX_AVATAR_BYTES = 2 * 1024 * 1024
 private const val MAX_PHOTO_BYTES = 30 * 1024 * 1024
+private const val MAX_JSON_BYTES = 64 * 1024L
 private const val LAST_SEEN_THROTTLE_MS = 30_000L
+
+/** Not 1008: clients sign out on that, but a slow network is no reason to. */
+private const val WS_AUTH_TIMEOUT: Short = 4408
+
+/**
+ * Bodies are read into memory, so cap them before reading (public routes too). GETs carry
+ * none we read, and a websocket (a GET upgrade) streams for hours: no limit there.
+ */
+fun requestBodyLimit(method: HttpMethod, path: String): Long = when {
+    method == HttpMethod.Get -> Long.MAX_VALUE
+    path.endsWith("/photos") -> MAX_PHOTO_BYTES.toLong()
+    path.endsWith("/avatar") -> MAX_AVATAR_BYTES.toLong()
+    else -> MAX_JSON_BYTES
+}
 
 data class DevicePrincipal(val device: Device)
 
@@ -105,8 +125,13 @@ fun Application.routes(services: Services) = routing {
             cacheControl { file ->
                 if (file.parentFile?.name == "assets") listOf(CacheControl.MaxAge(maxAgeSeconds = 365 * 86_400)) else listOf(CacheControl.NoCache(null))
             }
-            // unknown paths get the page, like default("index.html"), but uncached as well
+            // unknown paths get the page, like default("index.html"), but uncached as well;
+            // an app asking for an API that is gone gets a 404, not HTML
             fallback { _, call ->
+                if (call.request.path().startsWith("/api/")) {
+                    call.respond(HttpStatusCode.NotFound, ApiError("not found"))
+                    return@fallback
+                }
                 call.response.cacheControl(CacheControl.NoCache(null))
                 call.respondFile(web.resolve("index.html"))
             }
@@ -178,11 +203,16 @@ private fun Route.publicRoutes(services: Services) {
         }
     }
 
-    get("/api/app/android") { call.respond(services.releases.latest() ?: notFound()) }
+    get("/api/app/android") {
+        call.response.cacheControl(CacheControl.NoCache(null))
+        call.respond(services.releases.latest() ?: notFound())
+    }
 
     get(Releases.APK_PATH) {
         val apk = services.releases.apk
         if (!apk.isFile) notFound()
+        // 50 MB that is installed once: keep it out of the apps' HTTP cache (and their photos in)
+        call.response.cacheControl(CacheControl.NoStore(null))
         call.response.headers.append("Content-Disposition", "attachment; filename=\"${Releases.APK_NAME}\"")
         call.respondFile(apk)
     }
@@ -224,7 +254,13 @@ private fun Route.realtime(services: Services) {
         // browsers can't send headers on websockets: the token comes as first message
         val first = withTimeoutOrNull(10.seconds) { incoming.receiveCatching().getOrNull() } as? Frame.Text
         val auth = first?.let { runCatching { apiJson.decodeFromString(Event.serializer(), it.readText()) }.getOrNull() }
-        val principal = auth?.takeIf { it.type == EventTypes.AUTH }?.token?.let { services.authenticate(it) }
+        val token = auth?.takeIf { it.type == EventTypes.AUTH }?.token
+        if (token == null) {
+            close(CloseReason(WS_AUTH_TIMEOUT, "auth expected"))
+            return@webSocket
+        }
+        // only an unknown token means "revoked"
+        val principal = services.authenticate(token)
         if (principal == null) {
             close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "unauthorized"))
             return@webSocket
@@ -300,8 +336,13 @@ private fun Route.deviceRoutes(services: Services) {
     post("/api/pairing/claim") {
         val claimant = call.device()
         val claimantPersonId = claimant.personId ?: forbidden()
-        val code = Secrets.normalizeCode(call.receive<PairingClaimRequest>().code)
-        val pairing = store.pairingByCode(code) ?: notFound()
+        val request = call.receive<PairingClaimRequest>()
+        val pairing = store.pairingByCode(Secrets.normalizeCode(request.code)) ?: notFound()
+        if (request.expectedKind != null && request.expectedKind != pairing.kind) {
+            // someone passed off another device's code, e.g. a PC's as a frame's: burn it
+            store.deletePairing(pairing.id)
+            throw ApiException(HttpStatusCode.Conflict, "wrong kind")
+        }
         if (pairing.kind == DeviceKind.FRAME && store.person(claimantPersonId)?.isAdmin != true) forbidden()
         // a frame belongs to nobody; any other device joins the person who scanned it
         val personId = if (pairing.kind == DeviceKind.FRAME) null else claimantPersonId
@@ -404,6 +445,7 @@ private fun Route.adminRoutes(services: Services) {
         call.requireAdmin(services)
         val frame = store.frame(call.parameters["id"]!!) ?: notFound()
         val update = call.receive<FrameUpdate>()
+        update.settings.validate()
         store.updateFrame(frame.deviceId, update.name.cleanName(), update.albumId?.takeIf { it.isNotBlank() }, update.settings)
         services.notifyFrame(frame.deviceId)
         call.respond(HttpStatusCode.NoContent)
@@ -456,7 +498,6 @@ private fun Route.adminRoutes(services: Services) {
         call.requireAdmin(services)
         val person = store.person(call.parameters["id"]!!) ?: notFound()
         val update = call.receive<PersonUpdate>()
-        if (person.isAdmin && !update.isAdmin && store.adminCount() <= 1) badRequest("last admin")
         store.updatePersonAdmin(person.id, update.displayName?.cleanName()?.takeIf { it.isNotEmpty() }, update.isAdmin)
         services.notifyFramesOf(person.id)
         call.respond(HttpStatusCode.NoContent)
@@ -465,7 +506,6 @@ private fun Route.adminRoutes(services: Services) {
     delete("/persons/{id}") {
         call.requireAdmin(services)
         val person = store.person(call.parameters["id"]!!) ?: notFound()
-        if (person.isAdmin && store.adminCount() <= 1) badRequest("last admin")
         val frames = store.framesOfPerson(person.id)
         val devices = store.devicesOfPerson(person.id)
         store.deletePerson(person.id)
@@ -486,8 +526,11 @@ private fun Route.adminRoutes(services: Services) {
     delete("/devices/{id}") {
         call.requireAdmin(services)
         val device = store.device(call.parameters["id"]!!) ?: notFound()
+        // a removed frame disappears from its persons' lists
+        val listing = if (device.kind == DeviceKind.FRAME) store.frameContacts(device.id).flatMap { store.devicesOfPerson(it.person.id) } else emptyList()
         store.deleteDevice(device.id)
         services.hub.disconnect(device.id)
+        listing.forEach { services.hub.send(it.id, Event(EventTypes.CONFIG_CHANGED)) }
         call.respond(HttpStatusCode.NoContent)
     }
 
@@ -545,6 +588,18 @@ private suspend fun ApplicationCall.receiveAvatar(): Avatar {
     val bytes = receive<ByteArray>()
     if (bytes.isEmpty() || bytes.size > MAX_AVATAR_BYTES) badRequest("avatar must be 1 byte to 2 MB")
     return Avatar(bytes, type.toString())
+}
+
+/** The same limits as the admin pages; a frame must never get a setting it can't live with. */
+private fun FrameSettings.validate() {
+    if (slideshowIntervalSeconds !in 5..600) badRequest("slideshowIntervalSeconds must be 5 to 600")
+    if (idleTimeoutSeconds !in 10..3600) badRequest("idleTimeoutSeconds must be 10 to 3600")
+    if (volume != null && volume !in 0..100) badRequest("volume must be 0 to 100")
+    if (brightness != null && brightness !in 0..100) badRequest("brightness must be 0 to 100")
+    if ((nightStart == null) != (nightEnd == null)) badRequest("nightStart and nightEnd go together")
+    listOfNotNull(nightStart, nightEnd).forEach { time ->
+        if (runCatching { LocalTime.parse(time) }.isFailure) badRequest("night times must be HH:mm")
+    }
 }
 
 private fun String.cleanName(): String {

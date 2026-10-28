@@ -11,8 +11,15 @@
   let claimError = $state("");
   let claiming = $state(false);
 
+  let loadError = $state("");
+
   async function load() {
-    [frames, persons] = await Promise.all([api.admin.frames(), api.admin.persons()]);
+    try {
+      [frames, persons] = await Promise.all([api.admin.frames(), api.admin.persons()]);
+      loadError = "";
+    } catch (e) {
+      loadError = `Rahmen konnten nicht geladen werden: ${(e as Error).message}`;
+    }
   }
 
   async function loadAlbums() {
@@ -34,12 +41,16 @@
     claiming = true;
     claimError = "";
     try {
-      await api.claimPairing(code);
+      await api.claimPairing(code, "frame");
       code = "";
       await load();
     } catch (e) {
       claimError =
-        e instanceof ApiError && e.status === 404 ? "Code unbekannt oder abgelaufen." : `Das hat nicht geklappt: ${(e as Error).message}`;
+        e instanceof ApiError && e.status === 404
+          ? "Code unbekannt oder abgelaufen."
+          : e instanceof ApiError && e.message === "wrong kind"
+            ? "Das ist kein Code eines Rahmens. Der Code ist jetzt ungültig."
+            : `Das hat nicht geklappt: ${(e as Error).message}`;
     } finally {
       claiming = false;
     }
@@ -57,6 +68,7 @@
     {#if claimError}<p class="error">{claimError}</p>{/if}
   </form>
 
+  {#if loadError}<p class="error">{loadError}</p>{/if}
   {#if albumError}<p class="muted">{albumError}</p>{/if}
 
   {#each frames as frame (frame.device.id)}

@@ -13,10 +13,13 @@ import io.ktor.server.auth.bearer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.PayloadTooLargeException
+import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.forwardedheaders.XForwardedHeaders
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
 import io.ktor.server.response.respond
 import io.ktor.server.websocket.WebSockets
@@ -100,12 +103,14 @@ fun Application.closeby(services: Services) {
         filter { call -> !call.request.path().startsWith("/api/photos/") && call.request.path() != "/health" }
     }
     install(ContentNegotiation) { json(apiJson) }
+    install(RequestBodyLimit) { bodyLimit { call -> requestBodyLimit(call.request.httpMethod, call.request.path()) } }
     install(WebSockets) {
         pingPeriod = 20.seconds
         timeout = 30.seconds
     }
     install(StatusPages) {
         exception<ApiException> { call, e -> call.respond(e.status, ApiError(e.message ?: "error")) }
+        exception<PayloadTooLargeException> { call, _ -> call.respond(HttpStatusCode.PayloadTooLarge, ApiError("too large")) }
         exception<BadRequestException> { call, e -> call.respond(HttpStatusCode.BadRequest, ApiError(e.message ?: "bad request")) }
         exception<PhotoSourceException> { call, e ->
             call.application.log.warn("photo source: {}", e.message)

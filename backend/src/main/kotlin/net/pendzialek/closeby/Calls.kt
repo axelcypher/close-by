@@ -1,10 +1,13 @@
 package net.pendzialek.closeby
 
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.pendzialek.closeby.api.CallJoin
@@ -15,6 +18,7 @@ import net.pendzialek.closeby.api.Event
 import net.pendzialek.closeby.api.EventTypes
 import net.pendzialek.closeby.api.PartyKind
 import net.pendzialek.closeby.api.StartCallRequest
+import org.slf4j.LoggerFactory
 
 class ApiException(val status: HttpStatusCode, message: String) : Exception(message)
 
@@ -48,10 +52,30 @@ class Calls(
         fun involves(deviceId: String) = caller.id == deviceId || callees.any { it.id == deviceId }
     }
 
+    private val log = LoggerFactory.getLogger(Calls::class.java)
     private val calls = mutableMapOf<String, Call>()
     private val mutex = Mutex()
 
+    /**
+     * FCM messages go out one after another, off the request path: a slow FCM must not
+     * hold up the caller's HTTP answer, and a phone must get call.incoming before call.taken.
+     */
+    private val pushes = Channel<Pair<String, Map<String, String>>>(Channel.UNLIMITED)
+
     init {
+        scope.launch {
+            for ((token, data) in pushes) {
+                try {
+                    // one stalled send must not hold up the rings queued behind it
+                    val result = withTimeoutOrNull(PUSH_TIMEOUT_MS) { push.send(token, data) }
+                    if (result == PushResult.UNREGISTERED) store.clearFcmToken(token)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.warn("push failed: {}", e.message)
+                }
+            }
+        }
         // a call whose clients vanished without hanging up would block both sides as "busy"
         scope.launch {
             while (true) {
@@ -147,6 +171,8 @@ class Calls(
     private suspend fun timeout(callId: String) {
         val call = mutex.withLock {
             val call = calls[callId]?.takeIf { it.state == State.RINGING } ?: return
+            // this coroutine is call.timeout: cancelling it would cancel the notifications below
+            call.timeout = null
             remove(call)
         }
         notify(listOf(call.caller) + call.callees, ended(callId, EndReasons.MISSED))
@@ -198,7 +224,7 @@ class Calls(
             hub.send(device.id, event)
             val token = device.fcmToken ?: continue
             if (device.kind != DeviceKind.PHONE) continue
-            if (push.send(token, event.toPushData()) == PushResult.UNREGISTERED) store.clearFcmToken(token)
+            pushes.trySend(token to event.toPushData())
         }
     }
 
@@ -217,6 +243,7 @@ class Calls(
 }
 
 private const val STALE_CHECK_MS = 30_000L
+private const val PUSH_TIMEOUT_MS = 10_000L
 
 fun notFound(): Nothing = throw ApiException(HttpStatusCode.NotFound, "not found")
 fun badRequest(message: String): Nothing = throw ApiException(HttpStatusCode.BadRequest, message)

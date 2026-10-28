@@ -17,12 +17,14 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The websocket to the backend, reconnecting with backoff for as long as
- * [start] is in effect. Server events come out of [events].
+ * [start] is in effect. Server events come out of [events]. All state lives on
+ * [scope]'s thread (main); OkHttp's callbacks hop over there first.
  */
 class Realtime(
     private val prefs: Prefs,
     private val api: Api,
     private val scope: CoroutineScope,
+    /** The server refused our token; it may have been revoked, the app checks that. */
     private val onRevoked: () -> Unit,
 ) {
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 16)
@@ -63,25 +65,29 @@ class Realtime(
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     val event = runCatching { json.decodeFromString(Event.serializer(), text) }.getOrNull() ?: return
-                    if (event.type == EventTypes.READY) {
-                        _connected.value = true
-                        retryMs = 1_000
-                    } else {
-                        _events.tryEmit(event)
+                    scope.launch {
+                        if (webSocket != socket) return@launch
+                        if (event.type == EventTypes.READY) {
+                            _connected.value = true
+                            retryMs = 1_000
+                        } else {
+                            _events.tryEmit(event)
+                        }
                     }
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     webSocket.close(code, null)
-                    if (code == 1008) {
-                        // token revoked by an admin
-                        running = false
-                        onRevoked()
+                    scope.launch {
+                        // unknown token; the app makes sure before it signs out, until then we keep trying
+                        if (code == 1008 && webSocket == socket) onRevoked()
+                        lost(webSocket)
                     }
-                    lost(webSocket)
                 }
 
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = lost(webSocket)
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    scope.launch { lost(webSocket) }
+                }
             },
         )
     }
@@ -91,6 +97,7 @@ class Realtime(
         socket = null
         _connected.value = false
         if (!running) return
+        retryJob?.cancel()
         retryJob = scope.launch {
             delay(retryMs)
             retryMs = (retryMs * 2).coerceAtMost(15_000)

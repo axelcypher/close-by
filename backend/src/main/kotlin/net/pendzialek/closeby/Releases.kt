@@ -18,7 +18,8 @@ class Releases(private val config: Config) {
         val versionFile = File(config.apkDir, "version.json")
         if (!versionFile.isFile || !apk.isFile) return null
         val version = json.decodeFromString(VersionFile.serializer(), versionFile.readText())
-        return AppRelease(version.versionCode, version.versionName, version.sha256, "${config.publicUrl}$APK_PATH")
+        // a new URL per release, so no cache on the way can hand out the previous APK
+        return AppRelease(version.versionCode, version.versionName, version.sha256, "${config.publicUrl}$APK_PATH?v=${version.versionCode}")
     }
 
     companion object {

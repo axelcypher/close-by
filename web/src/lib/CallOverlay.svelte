@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Track } from "livekit-client";
-  import { acceptCall, call, declineCall, hangUp, localVideoTrack, session, toggleCam, toggleMic } from "../session.svelte";
+  import { acceptCall, call, declineCall, hangUp, localVideoTrack, toggleCam, toggleMic } from "../session.svelte";
   import Avatar from "./Avatar.svelte";
 
   const state = $derived(call.state);
@@ -22,7 +22,7 @@
   }
 
   const localTrack = $derived.by(() => {
-    session.revision;
+    call.media;
     call.camOn;
     return state.phase === "active" || state.phase === "outgoing" ? localVideoTrack() : null;
   });
@@ -40,6 +40,7 @@
         <video class="self" use:video={localTrack} autoplay playsinline muted></video>
       {/if}
       <div class="name">{peer}</div>
+      {#if call.cameraFailed}<div class="notice">Kamera nicht verfügbar, nur Ton</div>{/if}
     </div>
     <div class="controls">
       <button class:off={!call.micOn} onclick={toggleMic}>{call.micOn ? "Mikrofon aus" : "Mikrofon an"}</button>
@@ -113,6 +114,14 @@
     position: absolute;
     left: 1rem;
     top: 1rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 45%);
+  }
+  .notice {
+    position: absolute;
+    left: 1rem;
+    bottom: 1rem;
     padding: 0.3rem 0.7rem;
     border-radius: 999px;
     background: rgb(0 0 0 / 45%);

@@ -8,6 +8,7 @@ google-services.json
 
 # build output
 .gradle/
+.kotlin/
 build/
 local.properties
 .idea/

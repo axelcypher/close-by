@@ -53,6 +53,7 @@ import net.pendzialek.closeby.call.CallScreen
 import net.pendzialek.closeby.call.CallUi
 import net.pendzialek.closeby.api.SlideshowPhoto
 import net.pendzialek.closeby.data.Images
+import net.pendzialek.closeby.device.DeviceOwner
 import net.pendzialek.closeby.ui.Accent
 import net.pendzialek.closeby.ui.rememberAvatar
 import net.pendzialek.closeby.ui.Muted
@@ -105,6 +106,49 @@ fun FrameScreen(viewModel: FrameController) {
     }
 }
 
+/**
+ * The offline banner. A locked frame (device owner) can only be opened by an admin command,
+ * which needs the internet: after a while offline (new router, changed Wi-Fi password) it
+ * offers the Wi-Fi settings on site, through the same ten-minute maintenance window.
+ */
+@Composable
+private fun Offline(since: Long?) {
+    val activity = LocalContext.current as Activity
+    val app = activity.applicationContext as CloseByApp
+    var longOffline by remember { mutableStateOf(false) }
+    LaunchedEffect(since) {
+        longOffline = false
+        if (since == null) return@LaunchedEffect
+        delay(since + OFFLINE_ESCAPE_MS - System.currentTimeMillis())
+        longOffline = true
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFB4432F)).padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            "Keine Verbindung zum Internet. Anrufe sind gerade nicht möglich.",
+            color = Color.White,
+            fontSize = 20.sp,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.Center,
+        )
+        if (longOffline && DeviceOwner.isActive(activity)) {
+            Button(onClick = {
+                app.startMaintenance()
+                // the kiosk has to be open before another app can come to the front
+                runCatching { activity.stopLockTask() }
+                // some ROMs have no Wi-Fi page of their own
+                runCatching { activity.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    .recoverCatching { activity.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }) { Text("WLAN einrichten") }
+        }
+    }
+}
+
+private const val OFFLINE_ESCAPE_MS = 5 * 60_000L
+
 /** Only during a maintenance window (admin command): a way into the Android settings. */
 @Composable
 private fun MaintenanceBar(modifier: Modifier) {
@@ -134,15 +178,7 @@ private fun MaintenanceBar(modifier: Modifier) {
 private fun Contacts(state: FrameState, images: Images, onCall: (FrameContact) -> Unit, onShowPhotos: () -> Unit) {
     val contacts = state.config?.contacts.orEmpty()
     Column(Modifier.fillMaxSize().padding(24.dp)) {
-        if (!state.connected) {
-            Text(
-                "Keine Verbindung zum Internet. Anrufe sind gerade nicht möglich.",
-                color = Color.White,
-                fontSize = 20.sp,
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFB4432F)).padding(16.dp),
-                textAlign = TextAlign.Center,
-            )
-        }
+        if (!state.connected) Offline(state.offlineSince)
         if (state.config == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Einen Moment …", fontSize = 28.sp, color = Muted)

@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.pendzialek.closeby.CloseByApp
 import net.pendzialek.closeby.api.DeviceInfo
+import net.pendzialek.closeby.api.DeviceKind
 import net.pendzialek.closeby.api.FrameAdmin
 import net.pendzialek.closeby.api.FrameCommands
 import net.pendzialek.closeby.api.FrameContactEntry
@@ -70,14 +71,14 @@ fun FramesAdmin(
             color = Muted,
         )
         Button(onClick = {
-            scanQr(context) { raw -> actions.perform { actions.say(claim(app, pairCode(raw) ?: raw)) } }
+            scanQr(context) { raw -> actions.perform { actions.say(claim(app, pairCode(raw) ?: raw, DeviceKind.FRAME)) } }
         }) { Text("QR-Code scannen") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(code, { code = it }, label = { Text("Code") }, singleLine = true, modifier = Modifier.weight(1f))
             OutlinedButton(onClick = {
                 val entered = code
                 code = ""
-                actions.perform { actions.say(claim(app, entered)) }
+                actions.perform { actions.say(claim(app, entered, DeviceKind.FRAME)) }
             }, enabled = code.isNotBlank()) { Text("Übernehmen") }
         }
     }

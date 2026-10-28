@@ -10,8 +10,10 @@ import android.media.RingtoneManager
 import android.os.BatteryManager
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -24,6 +26,7 @@ import net.pendzialek.closeby.CloseByApp
 import net.pendzialek.closeby.api.DeviceStatus
 import net.pendzialek.closeby.call.CallController
 import net.pendzialek.closeby.call.CallUi
+import net.pendzialek.closeby.call.MicrophoneNotAllowed
 import net.pendzialek.closeby.api.EndReasons
 import net.pendzialek.closeby.api.Event
 import net.pendzialek.closeby.api.EventTypes
@@ -44,6 +47,8 @@ data class FrameState(
     val view: FrameView = FrameView.CONTACTS,
     val call: CallUi = CallUi.None,
     val connected: Boolean = false,
+    /** Since when (ms) the websocket is down; null while connected. */
+    val offlineSince: Long? = null,
 )
 
 /**
@@ -74,10 +79,17 @@ class FrameController(private val app: CloseByApp) : CallController {
         ContextCompat.registerReceiver(app, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         app.realtime.start()
         callSession.onPeerLeft = { if (_state.value.call is CallUi.Active) hangUp() }
+        callSession.onPeerJoined = {
+            val call = _state.value.call
+            if (call is CallUi.Outgoing && call.callId != null) answered(call.callId, call.name)
+        }
+        callSession.onDisconnected = { if (currentCallId() != null) end("Verbindung unterbrochen") }
         scope.launch { app.realtime.events.collect(::onEvent) }
         scope.launch {
             app.realtime.connected.collect { connected ->
-                _state.update { it.copy(connected = connected) }
+                _state.update {
+                    it.copy(connected = connected, offlineSince = if (connected) null else it.offlineSince ?: System.currentTimeMillis())
+                }
                 // whatever changed while offline was not announced to us
                 if (connected) refresh()
             }
@@ -160,7 +172,7 @@ class FrameController(private val app: CloseByApp) : CallController {
             _state.update { it.copy(config = config) }
             loadSlideshow()
         } catch (e: ApiException) {
-            if (e.status == 401) app.signOut()
+            if (e.status == 401) app.checkRevoked()
         } catch (_: Exception) {
             // offline; the websocket reconnect triggers the next attempt
         }
@@ -221,19 +233,27 @@ class FrameController(private val app: CloseByApp) : CallController {
         touched()
         _state.update { it.copy(call = CallUi.Outgoing(contact.name, Images.personPicture(contact.personId, contact.avatarVersion))) }
         scope.launch {
+            var callId: String? = null
             try {
                 val join = api.startCall(contact.personId)
+                callId = join.callId
                 if (_state.value.call !is CallUi.Outgoing) {
                     // cancelled while the request was running
                     runCatching { api.endCall(join.callId) }
                     return@launch
                 }
                 _state.update { it.copy(call = (it.call as CallUi.Outgoing).copy(callId = join.callId)) }
+                armRingTimeout(join.callId)
                 callSession.join(join, _state.value.config?.settings?.volume)
-            } catch (e: ApiException) {
-                finish(contact.name, if (e.status == 409) "ist gerade nicht erreichbar" else "Anruf hat nicht geklappt")
-            } catch (_: Exception) {
-                finish(contact.name, "Keine Verbindung zum Internet")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // over already (hung up, declined, timed out): whoever ended it cleaned up
+                val stillOurs = if (callId == null) _state.value.call is CallUi.Outgoing else currentCallId() == callId
+                if (!stillOurs) return@launch
+                // don't leave the person's phones ringing for a call that can't happen
+                callId?.let { id -> scope.launch { runCatching { api.endCall(id) } } }
+                finish(contact.name, failure(e))
             }
         }
     }
@@ -241,12 +261,23 @@ class FrameController(private val app: CloseByApp) : CallController {
     override fun accept() {
         val incoming = _state.value.call as? CallUi.Incoming ?: return
         stopRinging()
+        ringTimeout?.cancel()
         _state.update { it.copy(call = CallUi.Active(incoming.callId, incoming.name)) }
         scope.launch {
             try {
-                callSession.join(api.acceptCall(incoming.callId), _state.value.config?.settings?.volume)
-            } catch (_: Exception) {
-                finish(incoming.name, "Anruf hat nicht geklappt")
+                val join = api.acceptCall(incoming.callId)
+                if (currentCallId() != incoming.callId) {
+                    // hung up meanwhile; that hang-up may have reached the server before the accept
+                    runCatching { api.endCall(incoming.callId) }
+                    return@launch
+                }
+                callSession.join(join, _state.value.config?.settings?.volume, peerExpected = true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (currentCallId() != incoming.callId) return@launch
+                scope.launch { runCatching { api.endCall(incoming.callId) } }
+                finish(incoming.name, failure(e))
             }
         }
     }
@@ -254,26 +285,70 @@ class FrameController(private val app: CloseByApp) : CallController {
     override fun decline() {
         val incoming = _state.value.call as? CallUi.Incoming ?: return
         stopRinging()
+        ringTimeout?.cancel()
+        remember(incoming.callId)
         _state.update { it.copy(call = CallUi.None) }
         scope.launch { runCatching { api.declineCall(incoming.callId) } }
     }
 
-    override fun hangUp() {
+    override fun hangUp() = end("Gespräch beendet")
+
+    /** Ends the call here and on the server, showing [message]. */
+    private fun end(message: String) {
         val call = _state.value.call
-        val callId = when (call) {
-            is CallUi.Outgoing -> call.callId
-            is CallUi.Active -> call.callId
-            is CallUi.Incoming -> call.callId
-            else -> null
-        }
+        val callId = currentCallId()
         val name = when (call) {
             is CallUi.Outgoing -> call.name
             is CallUi.Active -> call.name
             is CallUi.Incoming -> call.name
             else -> ""
         }
-        finish(name, "Gespräch beendet")
+        finish(name, message)
         if (callId != null) scope.launch { runCatching { api.endCall(callId) } }
+    }
+
+    private fun currentCallId(): String? = when (val call = _state.value.call) {
+        is CallUi.Outgoing -> call.callId
+        is CallUi.Active -> call.callId
+        is CallUi.Incoming -> call.callId
+        else -> null
+    }
+
+    private fun failure(e: Exception) = when {
+        e is MicrophoneNotAllowed -> "Mikrofon ist nicht erlaubt"
+        e is ApiException && e.status == 409 -> "ist gerade nicht erreichbar"
+        e is ApiException -> "Anruf hat nicht geklappt"
+        else -> "Keine Verbindung zum Internet"
+    }
+
+    /** The person took the call (call.accepted, or they showed up in the room). */
+    private fun answered(callId: String, name: String) {
+        ringTimeout?.cancel()
+        _state.update { it.copy(call = CallUi.Active(callId, name)) }
+        callSession.expectPeer()
+    }
+
+    private var ringTimeout: Job? = null
+
+    /** In case call.ended gets lost (websocket down at the wrong moment), ringing stops on its own. */
+    private fun armRingTimeout(callId: String) {
+        ringTimeout?.cancel()
+        ringTimeout = scope.launch {
+            delay(RING_TIMEOUT_MS)
+            val call = _state.value.call
+            if ((call is CallUi.Incoming || call is CallUi.Outgoing) && currentCallId() == callId) {
+                end("ist gerade nicht erreichbar")
+            }
+        }
+    }
+
+    /** Calls that are over here; a late duplicate of their call.incoming must not ring again. */
+    private val handled = mutableListOf<String>()
+
+    private fun remember(callId: String) {
+        if (callId in handled) return
+        handled += callId
+        if (handled.size > 20) handled.removeAt(0)
     }
 
     private fun onEvent(event: Event) {
@@ -283,28 +358,32 @@ class FrameController(private val app: CloseByApp) : CallController {
             EventTypes.FRAME_COMMAND -> event.command?.let(onCommand)
             EventTypes.CALL_INCOMING -> {
                 val from = event.from ?: return
+                val callId = event.callId ?: return
+                if (callId in handled) return
                 if (call != CallUi.None && call !is CallUi.Ended) return // busy; the backend times it out
                 touched()
                 if (!app.uiVisible) onIncomingWhileHidden(from.name)
                 val auto = event.autoAnswer == true
                 val version = _state.value.config?.contacts?.find { it.personId == from.id }?.avatarVersion
-                _state.update { it.copy(call = CallUi.Incoming(event.callId!!, from.name, Images.personPicture(from.id, version), auto)) }
+                _state.update { it.copy(call = CallUi.Incoming(callId, from.name, Images.personPicture(from.id, version), auto)) }
+                armRingTimeout(callId)
                 if (auto) {
                     scope.launch {
                         delay(3_000)
-                        if ((_state.value.call as? CallUi.Incoming)?.callId == event.callId) accept()
+                        if ((_state.value.call as? CallUi.Incoming)?.callId == callId) accept()
                     }
                 } else {
                     startRinging()
                 }
             }
-            EventTypes.CALL_ACCEPTED -> if (call is CallUi.Outgoing && call.callId == event.callId) {
-                _state.update { it.copy(call = CallUi.Active(event.callId!!, call.name)) }
+            EventTypes.CALL_ACCEPTED -> if (call is CallUi.Outgoing && call.callId != null && call.callId == event.callId) {
+                answered(call.callId, call.name)
             }
             EventTypes.CALL_DECLINED -> if (call is CallUi.Outgoing && call.callId == event.callId) {
                 finish(call.name, "hat gerade keine Zeit")
             }
             EventTypes.CALL_ENDED -> {
+                event.callId?.let(::remember)
                 val (callId, name) = when (call) {
                     is CallUi.Outgoing -> call.callId to call.name
                     is CallUi.Incoming -> call.callId to call.name
@@ -322,6 +401,8 @@ class FrameController(private val app: CloseByApp) : CallController {
     }
 
     private fun finish(name: String, message: String) {
+        currentCallId()?.let(::remember)
+        ringTimeout?.cancel()
         stopRinging()
         callSession.leave()
         _state.update { it.copy(call = CallUi.Ended(name, message)) }
@@ -358,5 +439,10 @@ class FrameController(private val app: CloseByApp) : CallController {
         stopRinging()
         callSession.leave()
         scope.cancel()
+    }
+
+    private companion object {
+        /** A bit longer than the server's ring timeout (CALL_RING_TIMEOUT_SECONDS, 45 s). */
+        const val RING_TIMEOUT_MS = 60_000L
     }
 }

@@ -1,11 +1,12 @@
 <script lang="ts">
   import { api, type FrameRef } from "../api";
-  import { call, session, startCall } from "../session.svelte";
+  import { call, session, startCall, tauriWindow } from "../session.svelte";
   import Avatar from "./Avatar.svelte";
 
   let frames = $state<FrameRef[] | null>(null);
   let error = $state("");
-  let permission = $state("Notification" in window ? Notification.permission : "denied");
+  // the Windows app pops its window up instead of notifying
+  let permission = $state(!tauriWindow() && "Notification" in window ? Notification.permission : "denied");
 
   async function load() {
     try {

@@ -10,16 +10,37 @@
     onChanged,
   }: { frame: FrameAdmin; persons: PersonAdmin[]; albums: ImmichAlbum[] | null; onChanged: () => void } = $props();
 
-  // edited on a local copy and saved explicitly
+  // edited on a local copy and saved explicitly; untouched parts follow the server
+  // (a new person joins every frame, a person may be merged away meanwhile)
   const initial = untrack(() => $state.snapshot(frame));
   let name = $state(initial.device.name);
   let albumId = $state(initial.albumId ?? "");
   let settings = $state(initial.settings);
   let nightMode = $state(!!initial.settings.nightStart);
   let contacts = $state<FrameContactEntry[]>(initial.contacts);
+  /** The server's contacts the local list started from. */
+  let baseContacts = initial.contacts.map((c) => c.personId);
+  let settingsDirty = false;
+  let contactsDirty = false;
   let saved = $state("");
   let error = $state("");
   let confirmRemove = $state(false);
+
+  $effect(() => {
+    const latest = $state.snapshot(frame);
+    untrack(() => {
+      if (!settingsDirty) {
+        name = latest.device.name;
+        albumId = latest.albumId ?? "";
+        settings = latest.settings;
+        nightMode = !!latest.settings.nightStart;
+      }
+      if (!contactsDirty) {
+        contacts = latest.contacts;
+        baseContacts = latest.contacts.map((c) => c.personId);
+      }
+    });
+  });
 
   const hidden = $derived(persons.filter((p) => !contacts.some((c) => c.personId === p.person.id)));
   const personById = $derived(new Map(persons.map((p) => [p.person.id, p.person])));
@@ -27,26 +48,51 @@
   function move(index: number, delta: number) {
     const target = index + delta;
     if (target < 0 || target >= contacts.length) return;
+    contactsDirty = true;
     [contacts[index], contacts[target]] = [contacts[target], contacts[index]];
   }
 
+  /** Same limits as the Android admin. */
+  function invalidSettings(): string | null {
+    const between = (value: number | null | undefined, min: number, max: number) =>
+      typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+    if (!between(settings.slideshowIntervalSeconds, 5, 600)) return "Bildwechsel: 5 bis 600 Sekunden.";
+    if (!between(settings.idleTimeoutSeconds, 10, 3600)) return "Diashow nach: 10 bis 3600 Sekunden.";
+    if (settings.volume != null && !between(settings.volume, 0, 100)) return "Lautstärke: 0 bis 100 % oder leer.";
+    return null;
+  }
+
   async function save() {
-    error = "";
+    error = invalidSettings() ?? "";
+    if (error) return;
+    // edits made while the requests run mark the editor dirty again and survive the reload
+    const sendSettings = settingsDirty;
+    const sendContacts = contactsDirty;
+    // built now: a reload while the first request runs replaces the local lists
+    // keep persons added on the server since editing began, drop persons that no longer exist
+    const added = frame.contacts.filter((c) => !baseContacts.includes(c.personId) && !contacts.some((own) => own.personId === c.personId));
+    const nextContacts = $state.snapshot([...contacts, ...added].filter((c) => personById.has(c.personId)));
+    settingsDirty = false;
+    contactsDirty = false;
     try {
-      await api.admin.updateFrame(frame.device.id, {
-        name,
-        albumId: albumId || null,
-        settings: {
-          ...settings,
-          nightStart: nightMode ? settings.nightStart || "22:00" : null,
-          nightEnd: nightMode ? settings.nightEnd || "07:00" : null,
-        },
-      });
-      await api.admin.setFrameContacts(frame.device.id, contacts);
+      if (sendSettings) {
+        await api.admin.updateFrame(frame.device.id, {
+          name,
+          albumId: albumId || null,
+          settings: {
+            ...settings,
+            nightStart: nightMode ? settings.nightStart || "22:00" : null,
+            nightEnd: nightMode ? settings.nightEnd || "07:00" : null,
+          },
+        });
+      }
+      if (sendContacts) await api.admin.setFrameContacts(frame.device.id, nextContacts);
       saved = "Gespeichert, der Rahmen übernimmt es sofort.";
       setTimeout(() => (saved = ""), 3000);
       onChanged();
     } catch (e) {
+      settingsDirty ||= sendSettings;
+      contactsDirty ||= sendContacts;
       error = (e as Error).message;
     }
   }
@@ -72,8 +118,13 @@
   }
 
   async function remove() {
-    await api.admin.deleteDevice(frame.device.id);
-    onChanged();
+    error = "";
+    try {
+      await api.admin.deleteDevice(frame.device.id);
+      onChanged();
+    } catch (e) {
+      error = (e as Error).message;
+    }
   }
 
   function lastSeen(timestamp?: number) {
@@ -107,7 +158,7 @@
   </div>
 
   <div class="columns">
-    <div class="stack">
+    <div class="stack" oninput={() => (settingsDirty = true)}>
       <label>Name <input type="text" bind:value={name} maxlength="60" /></label>
       <label>
         Album für die Diashow
@@ -158,11 +209,17 @@
             />
             <span class="grow">{person.displayName ?? person.name}</span>
             <label class="check small" title="Anrufe dieser Person nimmt der Rahmen selbst an">
-              <input type="checkbox" bind:checked={contact.autoAnswer} /> Auto-Annahme
+              <input type="checkbox" bind:checked={contact.autoAnswer} onchange={() => (contactsDirty = true)} /> Auto-Annahme
             </label>
             <button class="link" onclick={() => move(index, -1)} disabled={index === 0} aria-label="nach oben">↑</button>
             <button class="link" onclick={() => move(index, 1)} disabled={index === contacts.length - 1} aria-label="nach unten">↓</button>
-            <button class="link danger" onclick={() => contacts.splice(index, 1)}>Ausblenden</button>
+            <button
+              class="link danger"
+              onclick={() => {
+                contactsDirty = true;
+                contacts.splice(index, 1);
+              }}>Ausblenden</button
+            >
           </div>
         {/if}
       {/each}
@@ -179,7 +236,13 @@
               onError={(message) => (error = message)}
             />
             <span class="grow muted">{person.displayName ?? person.name}</span>
-            <button class="link" onclick={() => contacts.push({ personId: person.id, autoAnswer: false })}>Anzeigen</button>
+            <button
+              class="link"
+              onclick={() => {
+                contactsDirty = true;
+                contacts.push({ personId: person.id, autoAnswer: false });
+              }}>Anzeigen</button
+            >
           </div>
         {/each}
       {/if}

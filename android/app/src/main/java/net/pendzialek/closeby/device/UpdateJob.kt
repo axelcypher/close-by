@@ -10,7 +10,6 @@ import android.util.Log
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import net.pendzialek.closeby.CloseByApp
-import net.pendzialek.closeby.call.CallUi
 import net.pendzialek.closeby.data.AppMode
 
 /**
@@ -24,13 +23,16 @@ class UpdateJob : JobService() {
 
     override fun onStartJob(params: JobParameters): Boolean {
         val app = application as CloseByApp
-        val call = app.contactController?.state?.value?.call
-        val idle = call == CallUi.None || call is CallUi.Ended
-        if (app.mode.value != AppMode.CONTACT || app.uiVisible || !idle || !app.updater.canInstallSilently()) return false
+        // nobody may be using the app, neither now nor once the download is done
+        val unused = { !app.uiVisible && !app.inCall() }
+        if (app.mode.value != AppMode.CONTACT || !unused() || !app.updater.canInstallSilently()) return false
         work = app.scope.launch {
-            val release = app.updater.newerRelease()
-            if (release != null) Log.i("CloseBy", "update: ${app.updater.install(release)}")
-            jobFinished(params, false)
+            try {
+                val release = app.updater.newerRelease()
+                if (release != null) Log.i("CloseBy", "update: ${app.updater.install(release, unused)}")
+            } finally {
+                jobFinished(params, false)
+            }
         }
         return true
     }

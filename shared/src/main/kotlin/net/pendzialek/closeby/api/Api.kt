@@ -51,7 +51,11 @@ data class PairingStartResponse(
 )
 
 @Serializable
-data class PairingClaimRequest(val code: String)
+data class PairingClaimRequest(
+    val code: String,
+    /** What the claimant expects to add; a code of another kind is refused (and burnt). */
+    val expectedKind: DeviceKind? = null,
+)
 
 @Serializable
 data class PairingClaimResponse(val deviceId: String, val kind: DeviceKind)

@@ -69,11 +69,19 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     suspend fun updatePersonAdmin(id: String, displayName: String?, isAdmin: Boolean) = db.tx {
         exec("UPDATE persons SET display_name = ?, is_admin = ? WHERE id = ?", displayName, isAdmin.toInt(), id)
+        requireAdminLeft()
     }
 
-    suspend fun deletePerson(id: String) = db.tx { exec("DELETE FROM persons WHERE id = ?", id) }
+    suspend fun deletePerson(id: String) = db.tx {
+        exec("DELETE FROM persons WHERE id = ?", id)
+        requireAdminLeft()
+    }
 
-    suspend fun adminCount(): Int = db.tx { one("SELECT COUNT(*) FROM persons WHERE is_admin = 1") { it.getInt(1) } ?: 0 }
+    /** Checked inside the change's transaction, so two concurrent demotions can't both pass. */
+    private fun Tx.requireAdminLeft() {
+        val admins = one("SELECT COUNT(*) FROM persons WHERE is_admin = 1") { it.getInt(1) } ?: 0
+        if (admins == 0) badRequest("last admin") // rolls the change back
+    }
 
     suspend fun avatar(personId: String): Avatar? = db.tx {
         one("SELECT avatar, avatar_type FROM persons WHERE id = ? AND avatar IS NOT NULL", personId) {

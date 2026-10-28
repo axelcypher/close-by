@@ -9,27 +9,47 @@
 
   let loading = $state(true);
   let offline = $state(false);
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryMs = 2000;
 
   async function start() {
-    loading = true;
-    offline = false;
+    clearTimeout(retryTimer);
     if (storedToken()) {
+      // never the setup screen while a signed-in device waits for /api/me; retries keep the offline screen
+      if (!offline) loading = true;
       try {
         await loadMe();
+        offline = false;
+        retryMs = 2000;
         connectRealtime();
       } catch (e) {
-        if (e instanceof ApiError && e.status === 401) logout();
-        else offline = true;
+        if (e instanceof ApiError && e.status === 401) {
+          offline = false;
+          logout();
+        } else {
+          // e.g. the server restarts for a release; the tray app must come back on its own to ring again
+          offline = true;
+          retryTimer = setTimeout(start, retryMs);
+          retryMs = Math.min(retryMs * 2, 60_000);
+        }
       }
+    } else {
+      offline = false;
     }
     loading = false;
   }
 
   onMount(() => {
     start();
-    // audio may only start after a user gesture; the first click unlocks the ringtone
+    // audio may only start after a user gesture in some browsers; the first click unlocks the ringtone
     const unlock = () => ringer.unlock();
     window.addEventListener("pointerdown", unlock, { once: true });
+    const online = () => offline && start();
+    window.addEventListener("online", online);
+    return () => {
+      clearTimeout(retryTimer);
+      window.removeEventListener("online", online);
+    };
   });
 </script>
 

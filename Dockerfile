@@ -4,12 +4,17 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
-RUN npm run build
+# vite build alone does not type-check
+RUN npm run check && npm run build
 
 # ---- backend build ----
 FROM gradle:9.8.0-jdk21 AS backend
 WORKDIR /src
-COPY . .
+# only what the backend build reads, so the APK and installer of each run don't bust the layer
+COPY settings.gradle.kts build.gradle.kts ./
+COPY gradle/ gradle/
+COPY shared/ shared/
+COPY backend/ backend/
 RUN gradle :backend:installDist --no-daemon --console=plain
 
 # ---- runtime ----

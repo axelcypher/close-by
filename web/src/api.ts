@@ -99,13 +99,13 @@ async function request<T>(method: string, path: string, body?: unknown, headers:
   });
   if (!response.ok) {
     const text = await response.text();
-    let message = text;
+    let message = text.trimStart().startsWith("<") ? "" : text; // a proxy's HTML error page says nothing useful
     try {
-      message = JSON.parse(text).error ?? text;
+      message = JSON.parse(text).error ?? message;
     } catch {
       // plain text error
     }
-    throw new ApiError(response.status, message || response.statusText);
+    throw new ApiError(response.status, message || response.statusText || `HTTP ${response.status}`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -117,7 +117,8 @@ export const api = {
   startPairing: (kind: DeviceKind, name: string) => request<PairingStartResponse>("POST", "/api/pairing/start", { kind, name }),
   pollPairing: (id: string, pollSecret: string) =>
     request<PairingStatus>("GET", `/api/pairing/${id}`, undefined, { "X-Poll-Secret": pollSecret }),
-  claimPairing: (code: string) => request<{ deviceId: string; kind: DeviceKind }>("POST", "/api/pairing/claim", { code }),
+  claimPairing: (code: string, expectedKind?: DeviceKind) =>
+    request<{ deviceId: string; kind: DeviceKind }>("POST", "/api/pairing/claim", { code, expectedKind }),
 
   me: () => request<Me>("GET", "/api/me"),
   signOut: () => request<void>("DELETE", "/api/me"),
@@ -162,7 +163,12 @@ function pictureUrl(path: string): Promise<string | null> {
     url = fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
       .then((r) => (r.ok ? r.blob() : null))
       .then((blob) => (blob ? URL.createObjectURL(blob) : null))
-      .catch(() => null);
+      .catch(() => null)
+      .then((result) => {
+        // a failure (offline after sleep, server restart) must not stick for the life of the page
+        if (!result) pictureCache.delete(path);
+        return result;
+      });
     pictureCache.set(path, url);
   }
   return url;
